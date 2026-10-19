@@ -148,6 +148,13 @@
     var md = s.match(/([一二三四五六七八九十\d]{1,3})日内/);
     if (md) return addDays(today, cnToInt(md[1]));
 
+    /* 「3 天后」「5 天之内」「一周后」「半个月后」 */
+    var md2 = s.match(/([零一二两三四五六七八九十百\d]{1,3})\s*天(之内|以内|内|之后|后)/);
+    if (md2) return addDays(today, cnToInt(md2[1]));
+    if (/半个月(之内|以内|内|之后|后)?/.test(s)) return addDays(today, 15);
+    if (/(^|[^个])一周(之内|以内|内|之后|后)/.test(s)) return addDays(today, 7);
+    if (/(^|[^个])两?周(之内|以内|内|之后|后)/.test(s)) return addDays(today, 14);
+
     // 周一~周日 / 本周X / 下周X / 星期X
     var w = s.match(/(下{1,2}|本|这)?(?:周|星期|礼拜)([一二三四五六七日天])/);
     if (w) {
@@ -414,8 +421,13 @@
     }
     if (!course) collect.push(pre + '没判断出是哪门课，请选一下');
 
-    var dueOn = obj.dueOn ? parseDueDate(obj.dueOn, today) : null;
-    if (obj.dueOn && !dueOn) {
+    /* 日期优先级：模型给的绝对日期 > 模型给的「70 小时后」> 原文里的相对时间 > 原文里的日期 > 明天 */
+    var relModel = parseRelative(String(obj.dueOn || ''), ctx);
+    var relRaw = parseRelative(String(obj.raw || ''), ctx);
+    var rel = relModel || relRaw;
+    var dueOn = parseDueDate(obj.dueOn || '', today);
+    if (!dueOn && rel) dueOn = rel.dueOn;
+    if (!dueOn && obj.dueOn) {
       collect.push(pre + '截止日期没看懂（原文：' + String(obj.dueOn).slice(0, 20) + '），先按明天算');
     }
     if (!dueOn) dueOn = parseDueDate(obj.raw || '', today);
@@ -423,12 +435,13 @@
     if (dueOn && diffDays(today, dueOn) < 0) {
       collect.push(pre + '识别出的日期已经过去，改成明天');
       dueOn = addDays(today, 1);
+      rel = null;
     }
     if (!dueOn) dueOn = addDays(today, 1);
 
     /* 具体几点：模型给了就用它的，没给就从原文里找 */
-    var dueTime = parseDueTime(String(obj.dueTime || '')) || parseDueTime(obj.dueOn || '') ||
-      parseDueTime(obj.raw || '');
+    var dueTime = parseDueTime(String(obj.dueTime || '')) || (rel && rel.dueTime) ||
+      parseDueTime(obj.dueOn || '') || parseDueTime(obj.raw || '');
     if (diffDays(today, dueOn) < 0) dueTime = '';
 
     var estMin = Number(obj.estMin);
@@ -466,7 +479,7 @@
 
     var arr = pickTaskArray(obj);
     for (var i = 0; i < arr.length && tasks.length < MAX_TASKS; i++) {
-      var t = normalizeOne(arr[i], { today: today, courses: courses }, warnings, arr.length > 1 ? i + 1 : 0);
+      var t = normalizeOne(arr[i], { today: today, courses: courses, nowAt: ctx.nowAt }, warnings, arr.length > 1 ? i + 1 : 0);
       if (t) tasks.push(t);
     }
 
@@ -533,6 +546,9 @@
     s = s.replace(/(这|本|下{1,2})\s*(个)?\s*(周|星期|礼拜)(内|之前|前)?/g, ' ');
     s = s.replace(/(今天|今晚|今日|大后天|后天|明天|明日)/g, ' ');
     s = s.replace(/[一二三四五六七八九十\d]{1,3}\s*(日|天)内/g, ' ');
+    s = s.replace(/[零一二两三四五六七八九十百\d]{1,3}\s*天(之内|以内|内|之后|后)/g, ' ');
+    s = s.replace(/半个月(之内|以内|内|之后|后)?/g, ' ');
+    s = s.replace(/(一|两|二)?周(之内|以内|内|之后|后)/g, ' ');
     // 几点、几小时后、剩多久
     s = s.replace(/(凌晨|早上|上午|中午|下午|傍晚|晚上|今晚|明晚)?\s*\d{1,2}\s*[点:：]\s*(\d{1,2}\s*分?|半)?/g, ' ');
     s = s.replace(/剩(下|余)?\s*[零一二两三四五六七八九十百\d.]+\s*(个)?\s*(小时|分钟)/g, ' ');
@@ -552,16 +568,28 @@
       var base = s;
       var best = '';
       var names = [course.name].concat(aliasOf(course.name));
+      var all = names.map(function (n) { return String(n || '').trim(); })
+        .filter(function (n) { return n.length >= 2; });
       names.forEach(function (n) {
         var raw = String(n || '').trim();
         if (raw.length < 2) return;
         var cands = [raw];
-        if (raw.length > 2) cands.push(raw.slice(0, 2));   // 大物实验 → 大物
+        /* 短别名：只有当它不是某个更长别名的前半截时才用，
+           否则「C语言作业」会被「C语」切成「言作业」 */
+        if (raw.length > 2) {
+          var head = raw.slice(0, 2);
+          var shadowed = all.some(function (l) {
+            return l.length > head.length && l.indexOf(head) === 0 && base.indexOf(l) >= 0;
+          });
+          if (!shadowed) cands.push(head);
+        }
         cands.forEach(function (c) {
           var q = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           if (!q) return;
           var t = tidy(base.replace(new RegExp(q, 'gi'), ' '));
-          if (t.length >= 3 && t !== base && (!best || t.length < best.length)) best = t;
+          /* 摘完只剩一两个字就别摘了，留着原话更好认 */
+          var minLen = 3;
+          if (t.length >= minLen && t !== base && (!best || t.length < best.length)) best = t;
         });
       });
       if (best) s = best;
