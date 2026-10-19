@@ -251,7 +251,8 @@
     }
 
     $('#view').innerHTML = html;
-    $('#foot').innerHTML = '课表与大纲来自 ' + esc(Seed.META.source) + '<br>勾选只存在这台手机上，换手机用「设置 → 导出」';
+    $('#foot').innerHTML = '课表与大纲来自 ' + esc(Seed.META.source) + '<br>勾选只存在这台手机上，换手机用「设置 → 导出」' +
+      '<br><span style="opacity:.7">' + esc(BUILD) + '</span>';
   }
 
   /* ---------------- 进度 ---------------- */
@@ -386,7 +387,7 @@
       '所以离线可用、结果稳定、每天看得懂为什么。</div></div></div>';
 
     $('#view').innerHTML = html;
-    $('#foot').innerHTML = 'v1 · 数据只在本机';
+    $('#foot').innerHTML = esc(BUILD) + ' · 数据只在本机';
 
     $('#setTerm').onclick = function () {
       var v = $('#termStart').value;
