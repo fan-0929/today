@@ -256,22 +256,22 @@
 
   function renderProgress() {
     var stats = R.courseStats(state, viewDate);
-    var html = '<div class="h">每门课跟到哪了 <span class="n">' + R.fmtCN(viewDate) + '</span></div>';
+    var html = '<div class="h">课表走到哪了 <span class="n">' + R.fmtCN(viewDate) + '</span></div>';
     html += '<div class="card">';
     stats.forEach(function (s) {
       var c = s.course;
-      var pct = s.planK ? Math.min(100, Math.round((s.actual / s.planK) * 100)) : 0;
+      /* 只报「课表已经上过几次 / 大纲一共几次」，不再拿勾选去算落后 */
+      var pct = s.limit ? Math.min(100, Math.round((s.planK / s.limit) * 100)) : 0;
       var badge = s.finished
         ? '<span class="badge">大纲讲完</span>'
-        : s.behind === 0
-          ? '<span class="badge ok">跟上了</span>'
-          : '<span class="badge bad">落后 ' + s.behind + ' 次</span>';
+        : s.planK === 0
+          ? '<span class="badge">还没开课</span>'
+          : '<span class="badge ok">进行中</span>';
       html += '<div class="row">' +
         '<div class="row-hd"><i style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:' +
         esc(c.color || '#888') + '"></i><span class="nm">' + esc(c.name) + '</span>' + badge + '</div>' +
         '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="now">应到 <b>' + s.planK + '</b> 次 · 已勾 <b>' + s.actual + '</b> 次 · 大纲共 ' + s.limit + ' 次' +
-        (s.skipped ? ' · 起点前 ' + s.skipped + ' 次不计' : '') + '</div>' +
+        '<div class="now">课表已上 <b>' + s.planK + '</b> 次 · 大纲共 ' + s.limit + ' 次</div>' +
         (s.nowChapter
           ? '<div class="now">现在应该讲到 <b>' + esc(s.nowChapter.chapter.title) + '</b></div>'
           : '') +
@@ -300,8 +300,8 @@
       html += '</div>';
     }
     $('#view').innerHTML = html;
-    $('#foot').innerHTML = '「落后」= 课表上已经上过的次数 − 你勾掉的课后复习次数' +
-      (state.ignoredBefore ? '<br>复习起点 ' + esc(state.ignoredBefore) + '：之前的课次不计入应到' : '');
+    $('#foot').innerHTML = '这里只是课表和你的进度对个账，不催你：课表已上的次数按开学日推算，' +
+      '大纲分章次数可以在设置里改。';
   }
 
   /* ---------------- 设置 ---------------- */
