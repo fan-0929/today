@@ -523,6 +523,45 @@ test('图片路径：模型只给「70个小时后」也能算出日期', functi
   assert.strictEqual(r.tasks[0].dueTime, '08:00');
 });
 
+
+/* ---------------- 截图里「剩余 414 小时 26 分钟」 ---------------- */
+
+test('parseRelative：小时+分钟连写的剩余时间', function () {
+  var r = P.parseRelative('剩余414小时26分钟', { nowAt: '2026-10-19T21:37:00' });
+  assert.ok(r, '应该认出剩余时间');
+  assert.strictEqual(r.minutesLeft, 414 * 60 + 26);
+  assert.strictEqual(r.dueOn, '2026-11-06');
+  assert.strictEqual(r.dueTime, '04:03');
+});
+
+test('图片路径：模型把剩余时间放进 remain 也能算成日期', function () {
+  var reply = JSON.stringify({
+    tasks: [{
+      course: '程序设计(C语言)', title: '第6周 数组编程题2', dueOn: '',
+      remain: '剩余414小时26分钟', raw: '第6周 数组编程题2 剩余414小时26分钟'
+    }]
+  });
+  var r = P.normalizeResult(reply, { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T21:37:00' });
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-11-06');
+  assert.strictEqual(r.tasks[0].dueTime, '04:03');
+});
+
+test('提示词里明确要求把「剩余 X 小时」抄进 remain', function () {
+  var p = P.buildPrompt(['程序设计(C语言)'], '2026-10-19');
+  assert.ok(p.indexOf('remain') >= 0, '模板要有 remain 字段');
+  assert.ok(p.indexOf('剩余') >= 0, '要有剩余时间的说明');
+});
+
+test('标题清洗：不把「剩余 / 未交」留在标题里', function () {
+  var r = P.parseText('第4周 编程题1_选择语句 剩余78小时49分钟 未交', {
+    today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T21:37:00'
+  });
+  var t = r.tasks[0];
+  assert.strictEqual(t.dueOn, '2026-10-23');
+  assert.strictEqual(/剩余|未交/.test(t.title), false, '标题里不该有剩余/未交：' + t.title);
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
