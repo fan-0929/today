@@ -644,6 +644,58 @@ test('合并：条数不一致时退回本地并说明', function () {
   assert.strictEqual(m.tasks.length, 2);
   assert.ok(m.warnings.join('').indexOf('模型分成 1 条') >= 0);
 });
+/* ---------------- 识图丢日期：三条救援 ---------------- */
+
+var RAW_SHOT = '第6周 数组编程题2（数组习题，共10题，可黏贴）\n' +
+  '未交 剩余414小时26分钟\n' +
+  '第5周 数组编程题1（C语言例题，共10题，不可黏贴）\n' +
+  '未交 剩余271小时18分钟';
+var SHOT_CTX = { today: MON, courses: COURSES, nowAt: '2026-10-19T22:10:00' };
+
+test('识图原文：剩余时间算在上一行那条作业上', function () {
+  var list = P.fallbackTasks(RAW_SHOT, SHOT_CTX);
+  assert.strictEqual(list.length, 2);
+  assert.ok(list[0].title.indexOf('数组编程题2') >= 0);
+  assert.strictEqual(list[0].dueOn, '2026-11-06');
+  assert.strictEqual(list[0].dueTime, '04:36');
+  assert.strictEqual(list[1].dueOn, '2026-10-31');
+});
+
+test('识图原文：不把「未交/剩余…」当成一条作业', function () {
+  var list = P.fallbackTasks(RAW_SHOT, SHOT_CTX);
+  list.forEach(function (t) {
+    assert.ok(!/^未交|剩余|已完成/.test(t.title), '不该出现这种标题：' + t.title);
+  });
+});
+
+test('模型回答被截断：还能把完整的任务抢回来', function () {
+  var bad = '{"tasks":[{"course":"程序设计(C语言)","title":"数组编程题2","remain":"剩余414小时26分钟"},' +
+    '{"course":"程序设计(C语言)","title":"编程题3","remain":"剩余78小时49分';
+  var r = P.normalizeResult(bad, SHOT_CTX);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].title, '数组编程题2');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-11-06');
+  assert.ok(r.warnings.join('').indexOf('截断') >= 0);
+});
+
+test('任务没日期、原文顶层有剩余时间：自己算出来', function () {
+  var model = JSON.stringify({
+    tasks: [{ course: '程序设计(C语言)', title: '数组编程题2' },
+            { course: '程序设计(C语言)', title: '数组编程题1' }],
+    raw: RAW_SHOT
+  });
+  var r = P.normalizeResult(model, SHOT_CTX);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-11-06');
+  assert.strictEqual(r.tasks[1].dueOn, '2026-10-31');
+  assert.ok(r.warnings.join('').indexOf('默认明天') < 0, '算出日期后不该再报默认明天');
+});
+
+test('确实没有任何日期：仍然默认明天并提示', function () {
+  var r = P.normalizeResult(JSON.stringify({ tasks: [{ course: '程序设计(C语言)', title: '数组编程题2' }], raw: '' }), SHOT_CTX);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-20');
+  assert.ok(r.warnings.join('').indexOf('默认明天') >= 0);
+});
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
