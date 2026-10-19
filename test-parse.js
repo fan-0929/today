@@ -486,6 +486,43 @@ test('buildTextMessages：同样的 JSON 契约能被 normalizeResult 吃下', f
   assert.strictEqual(r.tasks[0].dueTime, '22:40');
 });
 
+
+/* ---------------- 大数字小时 / 天后 / 图片路径 ---------------- */
+
+test('parseDueDate：3 天后 / 一周后 / 半个月后', function () {
+  assert.strictEqual(P.parseDueDate('3天后交', '2026-10-19'), '2026-10-22');
+  assert.strictEqual(P.parseDueDate('5天之内', '2026-10-19'), '2026-10-24');
+  assert.strictEqual(P.parseDueDate('一周后', '2026-10-19'), '2026-10-26');
+  assert.strictEqual(P.parseDueDate('半个月后', '2026-10-19'), '2026-11-03');
+});
+
+test('打字：70 个小时后 → 从现在往后推 70 小时', function () {
+  var r = P.parseText('c语言作业70个小时后截止', {
+    today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T10:00:00'
+  });
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-22');   // 10-19 10:00 + 70h
+  assert.strictEqual(r.tasks[0].dueTime, '08:00');
+  assert.strictEqual(r.tasks[0].courseName, '程序设计(C语言)');
+});
+
+test('打字：课程名不会被切成半截（C语言作业 ≠ 言作业）', function () {
+  var r = P.parseText('c语言作业70个小时后截止', {
+    today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T10:00:00'
+  });
+  assert.strictEqual(r.tasks[0].title, 'c语言作业', '课程名被切成半截：' + r.tasks[0].title);
+  assert.ok(r.tasks[0].title.length >= 3, '标题不该只剩一两个字');
+});
+
+test('图片路径：模型只给「70个小时后」也能算出日期', function () {
+  var r = P.normalizeResult(JSON.stringify({
+    tasks: [{ course: '程序设计(C语言)', title: '作业', dueOn: '70个小时后', raw: 'c语言作业70个小时后截止' }]
+  }), { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T10:00:00' });
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-22');
+  assert.strictEqual(r.tasks[0].dueTime, '08:00');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
