@@ -105,7 +105,8 @@
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
-    carry: '顺延补做', preview: '课前预习', ahead: '提前量', wrapup: '总复习'
+    carry: '顺延补做', preview: '课前预习', ahead: '提前量', wrapup: '总复习',
+    pre: '课前预习', rev: '课后复习', en: '英语'
   };
 
   /* ---------------- 顶栏 ---------------- */
@@ -163,7 +164,9 @@
     var tagClass = t.prio >= 100 ? 'hot' : t.prio >= 60 ? 'warm' : '';
     var meta = [];
     meta.push('<span class="tag ' + tagClass + '">' + esc(KIND_LABEL[t.kind] || t.kind) + '</span>');
-    meta.push('<span>' + esc(t.courseName) + '</span>');
+    if (t.courseName && t.courseName !== (KIND_LABEL[t.kind] || t.kind)) {
+      meta.push('<span>' + esc(t.courseName) + '</span>');
+    }
     if (t.estMin) meta.push('<span>约 ' + t.estMin + ' 分钟</span>');
     return '' +
       '<div class="todo' + (done ? ' done' : '') + (pend ? ' pend' : '') + '" data-id="' + esc(t.id) + '">' +
@@ -205,14 +208,7 @@
       '<small>' + (hasKey() ? '交给模型认字，你确认一下再进作业表' : '先在设置里填一个 Key') + '</small></button>' +
       '</div>';
 
-    /* 首次打开：历史课次会被算成积压，给一个「从今天开始」的出口 */
-    if (!state.ignoredBefore && built.all.filter(function (t) { return t.kind === R.KIND.CARRY; }).length >= 4) {
-      html += '<div class="card banner"><div class="bd"><b>第一次打开？</b>' +
-        '之前没勾过的课后复习现在都被算成积压了。不想回头补，就从今天开始记。</div>' +
-        '<div class="btns" style="padding:0 15px 14px"><button class="b" data-act="baseline">从今天开始记</button></div></div>';
-    }
-
-    /* 作业台账：按截止时间从早到晚，就在「今天先做这几件」前面 */
+    /* 作业台账：按截止时间从早到晚，就在今日清单前面 */
     var hwList = R.homeworkList(state, d);
     if (hwList.length) {
       var inToday = {};
@@ -226,69 +222,30 @@
       html += '</div>';
     }
 
-    /* 今日必做：先把「积压复习」摘出去，别让它把今天真正该做的事淹掉 */
-    if (built.all.length) {
-      var backlog = built.all.filter(function (t) { return t.kind === R.KIND.CARRY; });
-      var main = built.all.filter(function (t) { return t.kind !== R.KIND.CARRY; });
-      if (!main.length) { main = backlog.slice(0, 3); backlog = backlog.slice(3); }
-      var top = main.slice(0, 3);
-      var rest = main.slice(3);
-
-      html += '<div class="h">今天先做这几件' +
+    /* 今日清单：只做「今天这几门课的预习 + 复习」，外加每天固定的英语 */
+    var daily = R.dailyList(state, d);
+    if (daily.list.length) {
+      html += '<div class="h">今天要做' +
         (doneToday ? ' <span class="n">已勾 ' + doneToday + ' 件</span>' : '') + '</div>';
       html += '<div class="card top">' +
-        '<div class="top-hd"><h2>按「急 → 该趁热」排的 ' + top.length + ' 件</h2>' +
-        '<span>' + (backlog.length ? '积压单独列在下面' : (rest.length ? '剩下的在下面' : '今天事不多')) + '</span></div>';
-      top.forEach(function (t, i) { html += taskHTML(t, i + 1); });
+        '<div class="top-hd"><h2>' + daily.list.length + ' 件 · 课前预习 + 课后复习</h2>' +
+        '<span>勾掉一件少一件</span></div>';
+      daily.list.forEach(function (t) { html += taskHTML(t, 0); });
       html += '</div>';
-
-      if (rest.length) {
-        html += '<div class="h">剩下的 <span class="n">' + rest.length + ' 件</span></div>';
-        var groups = {};
-        var order = [];
-        rest.forEach(function (t) {
-          if (!groups[t.courseId]) { groups[t.courseId] = []; order.push(t.courseId); }
-          groups[t.courseId].push(t);
-        });
-        order.forEach(function (cid) {
-          var list = groups[cid];
-          var c = courseOf(cid);
-          html += '<details class="grp" open>' +
-            '<summary><i style="width:7px;height:7px;border-radius:50%;display:inline-block;background:' +
-            esc((c && c.color) || '#888') + '"></i>' + esc(list[0].courseName) +
-            '<span class="cnt">' + list.length + ' 件</span></summary>';
-          list.forEach(function (t) { html += taskHTML(t, 0); });
-          html += '</details>';
-        });
-      }
-
-      /* 积压：默认收起，一次补一件就够 */
-      if (backlog.length) {
-        var worst = 0;
-        backlog.forEach(function (t) { if ((t.overdueDays || 0) > worst) worst = t.overdueDays; });
-        html += '<details class="grp backlog"><summary>积压复习' +
-          '<span class="cnt">' + backlog.length + ' 件</span></summary>' +
-          '<div class="hint" style="padding:0 15px 12px">' +
-          (worst ? '最老的一件拖了 ' + worst + ' 天。' : '') +
-          '不用一次补完，勾掉一件就少一件。</div>';
-        backlog.forEach(function (t) { html += taskHTML(t, 0); });
-        html += '</details>';
-      }
     } else {
-      html += '<div class="h">今天先做这几件</div><div class="card empty">' +
-        '<div class="big">清空了</div>今天排到的都做完了，去下面看看明天要上的课。</div>';
+      html += '<div class="h">今天要做</div><div class="card empty">' +
+        '<div class="big">清空了</div>今天排到的都做完了，往下看看下一次课。</div>';
     }
 
-    /* 明天预告 */
+    /* 下一次课：只给时间地点，不再报章节进度 */
     var next = R.nextSessionAfter(state, d);
     if (next) {
       html += '<div class="h">下一次课</div><div class="card row">' +
         '<div class="row-hd"><i style="width:8px;height:8px;border-radius:50%;background:' +
         esc(next.course.color || '#888') + '"></i><span class="nm">' + esc(next.course.name) + '</span>' +
         '<span class="badge">' + esc(R.fmtCN(next.date)) + '</span></div>' +
-        '<div class="now">第 ' + next.k + ' 次课 · <b>' + esc(next.chapter.chapter.title) + '</b>' +
-        ' <span style="color:var(--ink-3)">(本章第 ' + next.chapter.sessionInChapter + '/' + next.chapter.totalInChapter + ' 次)</span></div>' +
-        '</div>';
+        '<div class="now">' + esc(next.period || '') + (next.course.place ? ' · ' + esc(next.course.place) : '') +
+        '</div></div>';
     }
 
     $('#view').innerHTML = html;
@@ -397,16 +354,6 @@
       '<div class="field"><label>内容</label><input id="hwTitle" placeholder="如：习题 1.4 第 1-8 题"></div>' +
       '<div class="field"><label>截止日期</label><input type="date" id="hwDue" value="' + esc(viewDate) + '"></div>' +
       '<div class="btns"><button class="b primary" id="addHw">加进作业表</button></div></div>';
-
-    html += '<div class="h">复习起点</div><div class="card">' +
-      '<div class="field"><label>忽略这个日期之前的未勾复习</label>' +
-      '<div style="font-size:14px">' + esc(state.ignoredBefore || '未设置（从开学第一周开始算）') + '</div>' +
-      '<div class="hint">课表 1-16 周每周都有课，所以第一次打开时，前几周没勾的课后复习会全被算成积压。' +
-      '点下面的按钮把「今天」当起点，之前的都不再催。</div>' +
-      '<div class="btns" style="padding:13px 0 0">' +
-      '<button class="b" id="setBaseline">从今天开始记</button>' +
-      (state.ignoredBefore ? '<button class="b danger" id="clearBaseline">清除，恢复全部历史</button>' : '') +
-      '</div></div></div>';
 
     html += '<div class="h">数据</div><div class="card">' +
       '<div class="btns">' +
