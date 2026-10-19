@@ -348,7 +348,13 @@
         if (k > limit) break;
         var ch = chapterAt(outline, k);
         if (!ch) break;
-        if (!best || d < best.date) best = { course: course, date: d, k: k, chapter: ch };
+        var slot = null;
+        (course.slots || []).forEach(function (s) {
+          if (s.day === isoWeekday(d)) slot = s;
+        });
+        if (!best || d < best.date) {
+          best = { course: course, date: d, k: k, chapter: ch, period: slot ? slot.period : '' };
+        }
         break;
       }
     });
@@ -435,9 +441,95 @@
     });
   }
 
+  /* ---------------- 简单版今日清单 ----------------
+     只要两件事：今天有课的那几门 → 课前预习 + 课后复习；
+     英语每天都有一条（当天本身有英语课时，用它的预习/复习顶上，不重复加）。
+     不写章节、不写第几次课、不算分钟、不计积压——一眼能看完，勾起来快。 */
+
+  function periodNo(period) {
+    var m = /(\d+)/.exec(String(period || ''));
+    return m ? Number(m[1]) : 99;
+  }
+
+  function todayCourseList(state, today) {
+    var courses = (state && state.courses) || [];
+    var out = [];
+    courses.forEach(function (course) {
+      var dates = courseDatesBefore(course, state.termStart, today);
+      if (!dates.length || dates[dates.length - 1] !== today) return;
+      var slot = null;
+      (course.slots || []).forEach(function (s) {
+        if (s.day === isoWeekday(today)) slot = s;
+      });
+      var period = slot ? slot.period : '';
+      out.push({ course: course, period: period, no: periodNo(period) });
+    });
+    out.sort(function (a, b) {
+      if (a.no !== b.no) return a.no - b.no;
+      return a.course.name < b.course.name ? -1 : 1;
+    });
+    return out;
+  }
+
+  function dailyList(state, today) {
+    state = state || {};
+    var done = state.done || {};
+    var list = [];
+    var todays = todayCourseList(state, today);
+    var hasEnglish = false;
+
+    todays.forEach(function (x) {
+      var c = x.course;
+      if (c.id === 'english') hasEnglish = true;
+      var when = x.period ? ('今天 ' + x.period + ' 上课') : '今天有课';
+      list.push({
+        id: today + '#' + c.id + '#pre',
+        kind: 'pre',
+        courseId: c.id,
+        courseName: c.name,
+        title: '课前预习：' + c.name,
+        reason: when + '，课前把上次讲的扫一遍，今天要讲的地方先看个眼熟',
+        period: x.period,
+        prio: 10
+      });
+      list.push({
+        id: today + '#' + c.id + '#rev',
+        kind: 'rev',
+        courseId: c.id,
+        courseName: c.name,
+        title: '课后复习：' + c.name,
+        reason: '上完当天趁热过一遍，比隔天再捡省一半时间',
+        period: x.period,
+        prio: 20
+      });
+    });
+
+    if (!hasEnglish) {
+      list.unshift({
+        id: today + '#english#daily',
+        kind: 'en',
+        courseId: 'english',
+        courseName: '英语',
+        title: '英语：背单词 + 读一段',
+        reason: '每天都做，不跟课表走',
+        period: '',
+        prio: 15
+      });
+    }
+
+    return {
+      list: list.filter(function (t) { return !done[t.id]; }),
+      all: list,
+      courses: todays,
+      hasEnglish: hasEnglish
+    };
+  }
+
   return {
     KIND: KIND,
     PRIO: PRIO,
+    dailyList: dailyList,
+    todayCourseList: todayCourseList,
     toDate: toDate,
     toISO: toISO,
     addDays: addDays,
