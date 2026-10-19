@@ -320,16 +320,20 @@
       '<div class="btns"><button class="b" id="setTerm">保存开学日</button></div>' +
       '</div>';
 
-    html += '<div class="h">智能识别 <span class="n">' + (hasKey() ? '已填 Key' : '未填 Key') + '</span></div><div class="card">' +
-      '<div class="field"><label>智谱 API Key（只存这台手机，不进导出文件）</label>' +
-      '<input type="password" id="apiKey" autocomplete="off" placeholder="open.bigmodel.cn 控制台里的 Key" value="' + esc(apiKey()) + '">' +
+    html += '<div class="h">智能识别 <span class="n">' + (hasKey() ? '已填 Key（尾号 ' + esc(apiKey().slice(-4)) + '）' : '未填 Key') + '</span></div><div class="card">' +
+      (storageOK ? '' : '<div class="hint" style="padding:12px 15px 0;color:var(--red)">' +
+        '⚠ 这个浏览器不让本地存东西（无痕/隐私模式？）。Key 只能这次开着有效，关掉页面就得重填。' +
+        '去设置里关掉无痕模式再开一次就能长期记住。</div>') +
+      '<div class="field"><label>智谱 API Key（只存这台设备，不进导出文件）</label>' +
+      '<input type="text" id="apiKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="open.bigmodel.cn 控制台里的 Key" value="' + esc(apiKey()) + '">' +
       '<div class="hint">拍照时要把这张图发给智谱的视觉模型（先在本地压到 1600px，照片里的位置信息 EXIF 已丢弃）。' +
-      (hasKey() ? '<br>当前：…' + esc(apiKey().slice(-4)) + '（已保存）'
+      (hasKey() ? '<br>当前已存 ' + apiKey().length + ' 位：…' + esc(apiKey().slice(-4)) + '（' + (storageOK ? '已写进这台设备' : '仅本次有效') + '）'
                 : '<br>没填 Key 时，拍照按钮只会提示你去填，不会发任何东西出去。') +
       '</div></div>' +
-      '<div class="field"><label>模型</label><input id="apiModel" value="' + esc(modelName()) + '">' +
+      '<div class="field"><label>模型</label><input id="apiModel" autocomplete="off" autocapitalize="off" spellcheck="false" value="' + esc(modelName()) + '">' +
       '<div class="hint">默认 glm-4v-flash。若提示「模型名不对」，改成 glm-4v-plus 或 glm-4v 再试一次。</div></div>' +
       '<div class="btns"><button class="b primary" id="saveKey">保存</button>' +
+      '<button class="b" id="pasteKey">粘贴</button>' +
       '<button class="b" id="testKey">测试连接</button>' +
       (hasKey() ? '<button class="b danger" id="clearKey">清除 Key</button>' : '') + '</div></div>';
 
@@ -420,13 +424,31 @@
     };
 
     $('#saveKey').onclick = function () {
-      var k = ($('#apiKey').value || '').trim();
+      var k = cleanKey($('#apiKey').value);
       var m = ($('#apiModel').value || '').trim();
-      setApiKey(k);
+      var wrote = setApiKey(k);
       setModelName(m);
-      toast(k ? '已保存，回今日页拍照试试' : '已清空 Key');
+      if (!k) toast('已清空 Key');
+      else if (!wrote) toast('存不进去：浏览器禁用了本地存储（开无痕了？）——这次仍能用');
+      else if (apiKey() !== k) toast('没写进去，再点一次保存');
+      else toast('已保存 ' + k.length + ' 位，尾号 ' + k.slice(-4));
       render();
     };
+    if ($('#pasteKey')) {
+      $('#pasteKey').onclick = function () {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+          toast('这个浏览器不让读剪贴板，长按输入框粘贴吧');
+          return;
+        }
+        navigator.clipboard.readText().then(function (t) {
+          var el = $('#apiKey');
+          el.value = cleanKey(t);
+          toast(el.value ? '粘进来了 ' + el.value.length + ' 位，记得点保存' : '剪贴板是空的');
+        }).catch(function () {
+          toast('读不了剪贴板，长按输入框选「粘贴」');
+        });
+      };
+    }
     $('#testKey').onclick = testConnection;
     if ($('#clearKey')) {
       $('#clearKey').onclick = function () {
@@ -541,18 +563,41 @@
   var DEFAULT_MODEL = 'glm-4v-flash';
   var API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 
+  /* 无痕模式 / 禁用存储的浏览器会让 localStorage 写失败，这里探测一次并留内存兜底 */
+  var memStore = {};
+  var storageOK = (function () {
+    try {
+      localStorage.setItem('__probe__', '1');
+      var v = localStorage.getItem('__probe__');
+      localStorage.removeItem('__probe__');
+      return v === '1';
+    } catch (e) { return false; }
+  })();
+
   function lsGet(k) {
-    try { return localStorage.getItem(k) || ''; } catch (e) { return ''; }
+    try {
+      var v = localStorage.getItem(k);
+      if (v != null) return v;
+    } catch (e) { /* 掉到内存兜底 */ }
+    return memStore[k] || '';
   }
-  function lsSet(k, v) {
-    try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); }
-    catch (e) { /* 无痕模式可能不让写，忽略 */ }
+  function lsSet(k, v) {           /* 返回「是否真的落盘」 */
+    memStore[k] = v || '';
+    try {
+      if (v) localStorage.setItem(k, v);
+      else localStorage.removeItem(k);
+      return true;
+    } catch (e) { return false; }
   }
   function apiKey() { return lsGet(KEY_SLOT); }
-  function setApiKey(v) { lsSet(KEY_SLOT, v); }
+  function setApiKey(v) { return lsSet(KEY_SLOT, v); }
   function hasKey() { return !!apiKey(); }
   function modelName() { return lsGet(MODEL_SLOT) || DEFAULT_MODEL; }
-  function setModelName(v) { lsSet(MODEL_SLOT, v || ''); }
+  function setModelName(v) { return lsSet(MODEL_SLOT, v || ''); }
+  /* 从输入框读出干净的 Key：去掉空格、换行、零宽字符、全角空格 */
+  function cleanKey(s) {
+    return String(s || '').replace(/[\s\u3000\u200b-\u200d\ufeff]/g, '');
+  }
 
   function openSheet(html) {
     $('#sheetIn').innerHTML = html;
