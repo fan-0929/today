@@ -13,6 +13,7 @@
 
   var WEEK_CN = ['一', '二', '三', '四', '五', '六', '日'];
   var MAX_TITLE = 60;
+  var MAX_TASKS = 8;
 
   /* ---------- 日期工具（与 rules.js 同口径，独立一份避免循环依赖） ---------- */
 
@@ -189,17 +190,20 @@
 
   function buildPrompt(courseNames, today) {
     return [
-      '你是学生的作业通知解析器。看图片里的文字，判断它是不是一条「要我做点什么」的作业/任务通知。',
-      '只输出一个 JSON 对象，不要解释、不要 Markdown 代码块。字段：',
-      '{"isTask": true 或 false,',
-      ' "course": "课程名，必须从下面的列表里原样挑一个；判断不出填空字符串",',
-      ' "title": "要做什么，动词开头，不超过 40 字",',
-      ' "dueOn": "YYYY-MM-DD；图里没有截止日期填空字符串",',
-      ' "estMin": 预计需要多少分钟的整数,',
-      ' "raw": "与作业有关的关键原文，不超过 80 字"}',
+      '你是学生的作业通知解析器。看图里的文字，把「要学生做的事」一条条列出来。',
+      '只输出一个 JSON 对象，不要解释、不要 Markdown 代码块。格式：',
+      '{"tasks":[{"course":"课程名","title":"要做什么","dueOn":"YYYY-MM-DD","estMin":数字,"raw":"这条对应的原文"}],',
+      ' "raw":"整张图里与作业有关的关键原文，不超过 300 字"}',
+      '规则：',
+      '1. 图里可能同时有好几条作业（例如截图里连着的几行通知、群里连着发的几条）——**每条单独一个对象，全都列出来**，不要合并、不要只挑第一条、不要漏。',
+      '2. 最多列 ' + MAX_TASKS + ' 条；排在最前面的放最急的。',
+      '3. title 尽量照抄原文的措辞（例如「习题 1.2 第 3-8 题」「实验报告：氧化还原滴定」），不要自己编，也不要加「请」「完成」这类词。',
+      '4. course 必须从课程列表里原样挑一个；判断不出就填空字符串，**不要因为课程不确定就把这条丢掉**。',
+      '5. dueOn 图里没有就填空字符串，别瞎猜；看到「明天 / 下周三 / 本周五前 / 3 日内」要换算成具体日期。',
+      '6. estMin 是整数分钟；估不出来填 30。',
+      '7. 如果整张图里没有任何「要你做的事」（例如只是课本正文、课件标题、闲聊），返回 {"tasks":[]}。',
       '课程列表：' + (courseNames || []).join(' / '),
-      '今天是 ' + today + '。看到「明天 / 下周三 / 本周五前 / 3 日内」这类写法，换算成具体日期。',
-      '如果图里只是课本页面、课件标题、聊天闲话，没有具体要求你做的事，isTask 填 false。'
+      '今天是 ' + today + '。'
     ].join('\n');
   }
 
@@ -250,52 +254,91 @@
   }
 
   /**
-   * 把模型的回答洗成可入库的任务。
-   * 返回 { ok, reason, task, warnings }
-   *   task: { courseId, courseName, title, dueOn, estMin, raw }
+   * 兜底：模型没给出干净 JSON（或者干脆说「不知道要干什么」）时，
+   * 把图里认到的原文切成候选行，让用户改个标题就能入库——而不是弹一个死胡同。
    */
-  function normalizeResult(modelText, ctx) {
+  function fallbackTasks(text, ctx) {
     ctx = ctx || {};
     var today = ctx.today || toISO(new Date());
     var courses = ctx.courses || [];
-    var warnings = [];
-
-    var obj = extractJSON(modelText);
-    if (!obj) {
-      return { ok: false, reason: 'not-json', warnings: ['模型没按格式回答'], raw: String(modelText || '').slice(0, 200) };
+    var s = String(text == null ? '' : text)
+      .replace(/```[a-zA-Z]*\n?/g, '\n')
+      .replace(/[{}\[\]"]/g, '\n');
+    var parts = s.split(/[\n\r]+/);
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < parts.length && out.length < MAX_TASKS; i++) {
+      var segs = String(parts[i]).split(/[；;。]\s*/);
+      for (var j = 0; j < segs.length && out.length < MAX_TASKS; j++) {
+        var line = segs[j]
+          .replace(/^\s*(?:[-*·•]|\(?\d+[).、]|[①-⑩]|[一二三四五六七八九十]+[、.])[\s、.]*/, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (line.length < 3 || line.length > 60) continue;
+        if (/^(?:isTask|tasks?|title|course|dueOn|estMin|raw)\b/.test(line)) continue;
+        if (/^[\s:,;.!?~—\-]/.test(line)) continue;                       /* JSON 残渣，例如 ":true" */
+        if (/^(?:true|false|null|nil|ok|okay|yes|no|none|\d+)$/i.test(line)) continue;
+        var key = line.replace(/\s/g, '');
+        if (seen[key]) continue;
+        seen[key] = 1;
+        var course = matchCourse(line, courses);
+        out.push({
+          courseId: course ? course.id : '',
+          courseName: course ? course.name : '',
+          title: line.slice(0, MAX_TITLE),
+          dueOn: parseDueDate(line, today) || '',
+          estMin: estMinGuess(line)
+        });
+      }
     }
-    if (obj.isTask === false) {
-      return { ok: false, reason: 'no-task', warnings: ['图里没看出要做的事'], raw: String(obj.raw || '').slice(0, 200) };
-    }
+    return out;
+  }
 
-    var title = String(obj.title || '').replace(/[\s　]+/g, ' ').trim();
+  /** 模型可能给 {tasks:[]} / {task:{}} / 数组 / 单个对象，统一抽成数组 */
+  function pickTaskArray(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return obj;
+    if (Array.isArray(obj.tasks)) return obj.tasks;
+    if (obj.task && typeof obj.task === 'object') return [obj.task];
+    if (obj.title || obj.courseName || obj.course) return [obj];
+    return [];
+  }
+
+  /** 归一单条：补课程、补截止日、补时长；collect 里收集提示语 */
+  function normalizeOne(obj, ctx, collect, no) {
+    if (!obj || typeof obj !== 'object') return null;
+    var today = ctx.today;
+    var courses = ctx.courses;
+    var pre = no ? '第 ' + no + ' 条：' : '';
+
+    var title = String(obj.title || obj.name || obj.content || '')
+      .replace(/[\s　]+/g, ' ').trim();
     if (!title && obj.raw) title = String(obj.raw).trim();
-    if (!title) {
-      return { ok: false, reason: 'no-title', warnings: ['没认出要做什么，请手动填'], raw: '' };
-    }
+    if (!title) return null;
     if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE);
 
     var course = null;
-    var byName = null;
-    if (obj.course) {
+    if (obj.course || obj.courseName) {
+      var want = clean(String(obj.course || obj.courseName));
       for (var i = 0; i < courses.length; i++) {
-        if (clean(courses[i].name) === clean(obj.course)) { byName = courses[i]; break; }
+        if (clean(courses[i].name) === want) { course = courses[i]; break; }
       }
-      course = byName || matchCourse(String(obj.course) + ' ' + title + ' ' + (obj.raw || ''), courses);
+      if (!course) {
+        course = matchCourse(String(obj.course || obj.courseName) + ' ' + title + ' ' + (obj.raw || ''), courses);
+      }
     } else {
       course = matchCourse(title + ' ' + (obj.raw || ''), courses);
     }
-    if (!course) warnings.push('没判断出是哪门课，请选一下');
+    if (!course) collect.push(pre + '没判断出是哪门课，请选一下');
 
     var dueOn = obj.dueOn ? parseDueDate(obj.dueOn, today) : null;
-    if (obj.dueOn && !dueOn) warnings.push('截止日期没看懂（原文：' + String(obj.dueOn).slice(0, 20) + '），默认明天');
-    if (!obj.dueOn) {
-      var fromRaw = parseDueDate(obj.raw || '', today);
-      dueOn = fromRaw;
-      if (!fromRaw) warnings.push('图里没写截止日期，默认明天');
+    if (obj.dueOn && !dueOn) {
+      collect.push(pre + '截止日期没看懂（原文：' + String(obj.dueOn).slice(0, 20) + '），先按明天算');
     }
+    if (!dueOn) dueOn = parseDueDate(obj.raw || '', today);
+    if (!obj.dueOn && !dueOn) collect.push(pre + '图里没写截止日期，默认明天');
     if (dueOn && diffDays(today, dueOn) < 0) {
-      warnings.push('识别出的日期已经过去了，已改成明天');
+      collect.push(pre + '识别出的日期已经过去，改成明天');
       dueOn = addDays(today, 1);
     }
     if (!dueOn) dueOn = addDays(today, 1);
@@ -305,17 +348,75 @@
     estMin = Math.max(5, Math.min(240, Math.round(estMin)));
 
     return {
-      ok: true,
-      reason: 'ok',
-      warnings: warnings,
-      raw: String(obj.raw || '').slice(0, 200),
-      task: {
-        courseId: course ? course.id : '',
-        courseName: course ? course.name : '',
-        title: title,
-        dueOn: dueOn,
-        estMin: estMin
-      }
+      courseId: course ? course.id : '',
+      courseName: course ? course.name : '',
+      title: title,
+      dueOn: dueOn,
+      estMin: estMin
+    };
+  }
+
+  /**
+   * 把模型的回答洗成可入库的任务列表。
+   * 返回 { ok, draft, reason, tasks, warnings, raw }
+   *   tasks: [{ courseId, courseName, title, dueOn, estMin }]
+   *   draft: true 表示这是兜底草稿（模型没给准话，内容取自原文），需要用户改
+   */
+  function normalizeResult(modelText, ctx) {
+    ctx = ctx || {};
+    var today = ctx.today || toISO(new Date());
+    var courses = ctx.courses || [];
+    var obj = extractJSON(modelText);
+    var raw = '';
+    var warnings = [];
+    var tasks = [];
+
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      raw = String(obj.raw || obj.text || '').slice(0, 400);
+    }
+
+    var arr = pickTaskArray(obj);
+    for (var i = 0; i < arr.length && tasks.length < MAX_TASKS; i++) {
+      var t = normalizeOne(arr[i], { today: today, courses: courses }, warnings, arr.length > 1 ? i + 1 : 0);
+      if (t) tasks.push(t);
+    }
+
+    if (tasks.length) {
+      return {
+        ok: true, draft: false, reason: 'ok',
+        tasks: tasks, task: tasks[0], warnings: warnings, raw: raw
+      };
+    }
+
+    /* 到这里说明模型没给出能用的条目：说「没有任务」、全是空标题、或者压根没给 JSON。
+       不管哪种，只要图里有字，就先摊成草稿让用户改。 */
+    var drafts = fallbackTasks(raw || modelText, { today: today, courses: courses });
+    var why = !obj ? 'not-json'
+      : (obj && obj.isTask === false) ? 'no-task'
+      : 'no-title';
+
+    if (drafts.length) {
+      return {
+        ok: true,
+        draft: true,
+        reason: why,
+        tasks: drafts,
+        task: drafts[0],
+        warnings: ['模型没给出明确结论，先把图里认到的内容按行列出来了——点一条、改改标题就能用'],
+        raw: raw || String(modelText || '').slice(0, 400)
+      };
+    }
+
+    var msg = why === 'not-json' ? '模型没按格式回答'
+      : why === 'no-task' ? '图里没找到要你做的事'
+      : '认出了字，但没凑出一条完整的事';
+    return {
+      ok: false,
+      draft: false,
+      reason: why,
+      tasks: [],
+      warnings: [msg + '，可以直接手填一条'],
+      raw: raw || (obj ? '' : String(modelText || '').slice(0, 400))
     };
   }
 
@@ -328,7 +429,7 @@
       messages: messages,
       temperature: 0.1,
       stream: false,
-      max_tokens: opts.maxTokens || 800
+      max_tokens: opts.maxTokens || 1500
     };
   }
 
@@ -359,6 +460,9 @@
     buildRequestBody: buildRequestBody,
     extractJSON: extractJSON,
     normalizeResult: normalizeResult,
+    normalizeOne: normalizeOne,
+    pickTaskArray: pickTaskArray,
+    fallbackTasks: fallbackTasks,
     explainError: explainError,
     ALIAS: ALIAS
   };
