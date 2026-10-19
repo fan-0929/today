@@ -8,6 +8,13 @@
 
 ---
 
+## 发版时必须同时升三处（血泪）
+
+1. `index.html` 里四个 `<script src="xxx.js?v=N">` 的 N；
+2. `app.js` 里 `navigator.serviceWorker.register('sw.js?v=N')` 和页脚可见的 `BUILD` 字符串；
+3. `sw.js` 里的 `CACHE = 'today-vN'`。
+
+只改文件不改 `?v=` 的话，GitHub Pages 的 CDN 会继续把旧 JS 按同一个缓存键返回，手机上看起来「改了等于没改」——这一版就是这么踩到的。页脚那行 `v12 · 2026-10-19` 就是用来核对手机上到底跑的哪一版。
 ## 三个页签
 
 | 页签 | 作用 |
