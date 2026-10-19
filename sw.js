@@ -1,5 +1,5 @@
-﻿/* 离线缓存：先把 app 壳存下来，之后没网也能打开 */
-var CACHE = 'today-v3';
+/* 离线缓存：先把 app 壳存下来，之后没网也能打开 */
+var CACHE = 'today-v4';
 var FILES = ['./', 'index.html', 'app.js', 'parse.js', 'rules.js', 'seed.js', 'manifest.webmanifest',
   'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 
