@@ -334,6 +334,97 @@ test('错误归因：max_tokens 被拒给的是人话，不是原始报文', fun
   assert.ok(s.indexOf('刷新页面') >= 0, s);
 });
 
+/* ---------------- 纯文字解析（打字 / 粘贴，不联网） ---------------- */
+
+function byText(text, today) {
+  return P.parseText(text, { today: today || MON, courses: COURSES });
+}
+
+test('打字：一句话里有科目和「下周三交」', function () {
+  var r = byText('高数习题 4.1 下周三交');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.tasks.length, 1);
+  var t = r.tasks[0];
+  assert.strictEqual(t.courseName, '高等数学A(1)');
+  assert.strictEqual(t.dueOn, '2026-10-28');
+  assert.ok(t.title.indexOf('习题') >= 0, t.title);
+  assert.ok(t.title.indexOf('4.1') >= 0, t.title);
+  assert.ok(t.title.indexOf('交') < 0, '标题里不该留着「交」：' + t.title);
+});
+
+test('打字：两行 → 两条作业，各带各的科目', function () {
+  var r = byText('高数习题 4.1 明天交\n英语作文周五前交');
+  assert.strictEqual(r.tasks.length, 2);
+  assert.strictEqual(r.tasks[0].courseName, '高等数学A(1)');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-20');
+  assert.strictEqual(r.tasks[1].courseName, '大学英语C(1)');
+  assert.strictEqual(r.tasks[1].dueOn, '2026-10-23');
+});
+
+test('打字：一行里两门课 → 按逗号拆成两条', function () {
+  var r = byText('高数习题 4.1 明天交，英语作文周五交');
+  assert.strictEqual(r.tasks.length, 2);
+  assert.strictEqual(r.tasks[0].courseName, '高等数学A(1)');
+  assert.strictEqual(r.tasks[1].courseName, '大学英语C(1)');
+});
+
+test('打字：编号列表也能拆', function () {
+  var r = byText('1. 高数习题 4.1 明天交\n2. 大物实验报告 三天内');
+  assert.strictEqual(r.tasks.length, 2);
+  assert.strictEqual(r.tasks[1].courseName, '大学物理实验A(1)');
+});
+
+test('打字：没写日期 → 按明天，并给提示', function () {
+  var r = byText('高数习题 4.1');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-20');
+  assert.ok(r.warnings.join('|').indexOf('没写截止日期') >= 0, r.warnings.join('|'));
+});
+
+test('打字：没认出科目 → 仍然收下，科目留空并提示', function () {
+  var r = byText('预习课本第 3 章 明天');
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].courseId, '');
+  assert.strictEqual(r.tasks[0].courseName, '');
+  assert.ok(r.warnings.join('|').indexOf('没认出是哪门课') >= 0, r.warnings.join('|'));
+});
+
+test('打字：过去日期改成明天并提示', function () {
+  var r = byText('高数习题 10月1日交');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-20');
+  assert.ok(r.warnings.join('|').indexOf('已经过去') >= 0, r.warnings.join('|'));
+});
+
+test('打字：空内容 / 空白 → 明确不 ok', function () {
+  var r = byText('   \n  ');
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'no-task');
+  assert.strictEqual(r.tasks.length, 0);
+});
+
+test('打字：实验报告给 60 分钟，习题给 40 分钟', function () {
+  var r = byText('大物实验报告 明天\n高数习题 4.1 明天');
+  assert.strictEqual(r.tasks[0].estMin, 60);
+  assert.strictEqual(r.tasks[1].estMin, 40);
+});
+
+test('打字：最多 8 条，多的丢掉', function () {
+  var lines = [];
+  for (var i = 1; i <= 12; i++) lines.push('高数习题 第' + i + '题 明天');
+  var r = byText(lines.join('\n'));
+  assert.strictEqual(r.tasks.length, 8);
+});
+
+test('打字：只说「下周」没给星期几 → 下周同一天，不当成明天', function () {
+  var r = byText('程序设计 第5章上机题 下周交');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-26');
+  assert.ok(r.tasks[0].title.indexOf('下周') < 0, '标题里不该留着「下周」：' + r.tasks[0].title);
+});
+
+test('打字：题目里的课程名会被摘掉，但不摘到只剩一两个字', function () {
+  assert.strictEqual(byText('大物实验报告 明天').tasks[0].title, '实验报告');
+  assert.strictEqual(byText('英语作文 明天').tasks[0].title, '英语作文');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
