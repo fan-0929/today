@@ -425,6 +425,40 @@ test('打字：题目里的课程名会被摘掉，但不摘到只剩一两个�
   assert.strictEqual(byText('英语作文 明天').tasks[0].title, '英语作文');
 });
 
+/* ---------------- 具体几点 / 还剩几小时 ---------------- */
+
+test('parseDueTime：几点、几点半、HH:MM', function () {
+  assert.strictEqual(P.parseDueTime('23:59 前'), '23:59');
+  assert.strictEqual(P.parseDueTime('今晚 8 点'), '20:00');
+  assert.strictEqual(P.parseDueTime('下午5点半'), '17:30');
+  assert.strictEqual(P.parseDueTime('上午 9 点 15 分'), '09:15');
+  assert.strictEqual(P.parseDueTime('明天交'), '');
+});
+
+test('parseRelative：几小时后 / 剩几小时 / 几分钟内', function () {
+  var now = '2026-10-19T14:00:00';
+  assert.deepStrictEqual(P.parseRelative('3小时后交', { nowAt: now }),
+    { dueOn: '2026-10-19', dueTime: '17:00', minutesLeft: 180 });
+  assert.strictEqual(P.parseRelative('剩 2 小时', { nowAt: now }).dueTime, '16:00');
+  assert.strictEqual(P.parseRelative('半小时内', { nowAt: now }).dueTime, '14:30');
+  assert.strictEqual(P.parseRelative('40分钟后', { nowAt: now }).dueTime, '14:40');
+  assert.strictEqual(P.parseRelative('明天交', { nowAt: now }), null);
+});
+
+test('parseText 认出「几小时后」并写进 dueTime，标题不残留时间词', function () {
+  var r = P.parseText('英语作文 3小时后交', { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T14:00:00' });
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-19');
+  assert.strictEqual(r.tasks[0].dueTime, '17:00');
+  assert.strictEqual(r.tasks[0].title, '英语作文');
+});
+
+test('parseText 认出「今晚 8 点前」', function () {
+  var r = P.parseText('高数习题 4.1 今晚8点前交', { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T09:00:00' });
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-19');
+  assert.strictEqual(r.tasks[0].dueTime, '20:00');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
@@ -433,3 +467,4 @@ if (fail) {
   failures.forEach(function (f) { console.log(' - ' + f); });
   process.exit(1);
 }
+
