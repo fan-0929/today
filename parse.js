@@ -546,6 +546,72 @@
     };
   }
 
+  /* ---------- 合并：本地规则 vs 模型 ----------
+     原则：本地规则是「确定性算出来的」，用户点「认一下」之前在预览里看到的就是它，
+     所以只要本地认出了东西，科目 / 标题 / 截止时间都以本地为准；
+     模型只用来补本地漏掉的信息和覆盖本地完全认不出的情况。
+     两边时间不一致时明说出来，别让用户以为是随机的。 */
+  function mergeResults(local, api) {
+    var warns = [];
+
+    if (!api || !api.tasks || !api.tasks.length) return local;
+    if (!local || !local.ok || !local.tasks || !local.tasks.length) return api;
+
+    if (local.tasks.length !== api.tasks.length) {
+      warns.push('模型分成 ' + api.tasks.length + ' 条，本地规则分成 ' + local.tasks.length +
+        ' 条；先按本地规则来，漏的删/补一下就行');
+      var only = cloneResult(local);
+      only.warnings = (only.warnings || []).concat(warns);
+      return only;
+    }
+
+    var out = [];
+    for (var i = 0; i < local.tasks.length; i++) {
+      var L = local.tasks[i];
+      var A = api.tasks[i];
+      var t = {
+        courseId: L.courseId || A.courseId,
+        courseName: L.courseName || A.courseName,
+        title: L.title || A.title,
+        dueOn: L.dueOn || A.dueOn,
+        dueTime: L.dueTime || A.dueTime,
+        estMin: A.estMin || L.estMin,
+        raw: L.raw || A.raw
+      };
+      if (L.dueOn && A.dueOn && L.dueOn !== A.dueOn) {
+        warns.push('「' + (L.title || '') + '」模型算成 ' + cnDate(A.dueOn) +
+          '，我按本地规则填了 ' + cnDate(L.dueOn) + '（点日期框能改）');
+      }
+      out.push(t);
+    }
+
+    var res = {
+      ok: true,
+      draft: false,
+      reason: 'merged',
+      tasks: out,
+      task: out[0],
+      warnings: (api.warnings || []).concat(local.warnings || []).concat(warns),
+      raw: local.raw || api.raw
+    };
+    return res;
+  }
+
+  /** 2026-10-22 → 10月22日 */
+  function cnDate(iso) {
+    var d = toDate(iso);
+    if (!d) return String(iso || '');
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
+  function cloneResult(r) {
+    return {
+      ok: r.ok, draft: r.draft, reason: r.reason,
+      tasks: (r.tasks || []).slice(), task: r.task,
+      warnings: (r.warnings || []).slice(), raw: r.raw
+    };
+  }
+
   /* ---------- 纯文字解析：不联网、不花 Key ---------- */
 
   /** 课程名 → 它所有的口语别名（用于从标题里把课程名摘掉） */
@@ -768,6 +834,7 @@
     buildRequestBody: buildRequestBody,
     extractJSON: extractJSON,
     normalizeResult: normalizeResult,
+    mergeResults: mergeResults,
     normalizeOne: normalizeOne,
     pickTaskArray: pickTaskArray,
     fallbackTasks: fallbackTasks,
