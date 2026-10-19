@@ -173,16 +173,24 @@ test('前后夹着废话也能抠出 JSON', function () {
   assert.strictEqual(r.task.dueOn, '2026-10-20');
 });
 
-test('isTask=false → 明确告诉用户没识别到任务', function () {
-  var r = norm('{"isTask":false,"raw":"第 4 章 导数"}');
-  assert.strictEqual(r.ok, false);
+test('isTask=false 但 raw 有字 → 摊成可编辑草稿，不是死胡同', function () {
+  var r = norm('{"isTask":false,"raw":"第 4 章 导数；习题 4.1 第 1-5 题"}');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.draft, true);
   assert.strictEqual(r.reason, 'no-task');
+  assert.ok(r.tasks.length >= 1);
+  assert.ok(r.tasks.some(function (t) { return t.title.indexOf('习题 4.1') >= 0; }));
 });
 
-test('完全不是 JSON → not-json，不硬猜', function () {
-  var r = norm('这是一张课本照片，上面有公式。');
-  assert.strictEqual(r.ok, false);
+test('完全不是 JSON → 仍然把句子摊成草稿', function () {
+  var r = norm('明天交高数习题 4.1；周五交英语作文');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.draft, true);
   assert.strictEqual(r.reason, 'not-json');
+  assert.strictEqual(r.tasks.length, 2);
+  assert.strictEqual(r.tasks[0].courseId, 'math');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-20');
+  assert.strictEqual(r.tasks[1].dueOn, '2026-10-23');
 });
 
 test('没给截止日 → 默认明天并给出提示', function () {
@@ -234,7 +242,64 @@ test('JSON 里带转义引号也能解析', function () {
   assert.strictEqual(r.task.courseId, 'chem-lab');
 });
 
-/* ---------------- 错误归因 ---------------- */
+/* ---------------- 一张图多条作业 ---------------- */
+
+test('多条 tasks 全部保留，不合并', function () {
+  var r = norm(JSON.stringify({
+    tasks: [
+      { course: '高等数学A(1)', title: '习题 4.1 第 1-5 题', dueOn: '2026-10-20', estMin: 40 },
+      { course: '大学英语C(1)', title: '写一篇 200 词作文', dueOn: '2026-10-23', estMin: 60 },
+      { course: '', title: '预习第 5 章', dueOn: '', estMin: 20 }
+    ],
+    raw: '三条作业'
+  }));
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.draft, false);
+  assert.strictEqual(r.tasks.length, 3);
+  assert.strictEqual(r.tasks[0].courseId, 'math');
+  assert.strictEqual(r.tasks[1].courseId, 'english');
+  assert.strictEqual(r.tasks[2].title, '预习第 5 章');
+  assert.strictEqual(r.tasks[2].dueOn, '2026-10-20'); // 没写日期 → 明天
+});
+
+test('兼容旧格式 {task:{...}}', function () {
+  var r = norm('{"task":{"course":"高数","title":"习题 3.2","dueOn":"2026-10-21","estMin":30}}');
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].courseId, 'math');
+  assert.strictEqual(r.task.courseId, 'math'); // 向后兼容字段
+});
+
+test('模型直接吐数组也能吃', function () {
+  var r = norm('[{"title":"A 作业","course":"大学化学"},{"title":"B 作业","course":"体育"}]');
+  assert.strictEqual(r.tasks.length, 2);
+  assert.strictEqual(r.tasks[0].courseId, 'chem');
+});
+
+test('字段名 name / content 也认', function () {
+  assert.strictEqual(norm('{"name":"做实验报告","course":"大学化学实验"}').tasks[0].title, '做实验报告');
+  assert.strictEqual(norm('{"content":"背 Unit 3","course":"英语"}').tasks[0].courseId, 'english');
+});
+
+test('超过 8 条只取前 8 条', function () {
+  var many = { tasks: [] };
+  for (var i = 0; i < 12; i++) many.tasks.push({ title: '作业' + i, course: '高数' });
+  assert.strictEqual(norm(JSON.stringify(many)).tasks.length, 8);
+});
+
+test('兜底切行：去掉序号、分号切多条、过滤空行', function () {
+  var r = P.fallbackTasks('1. 习题 1.2 第 3-8 题；2、实验报告\n\n  \n(3) 背单词', { today: MON, courses: COURSES });
+  assert.strictEqual(r.length, 3);
+  assert.strictEqual(r[0].title, '习题 1.2 第 3-8 题');
+  assert.strictEqual(r[1].title, '实验报告');
+  assert.strictEqual(r[2].title, '背单词');
+});
+
+test('兜底草稿也能猜出课程和截止日', function () {
+  var r = P.fallbackTasks('高数 下周三前交习题 4.2', { today: MON, courses: COURSES });
+  assert.strictEqual(r[0].courseId, 'math');
+  assert.strictEqual(r[0].dueOn, '2026-10-28');
+});
+
 
 test('HTTP 错误翻译成人话', function () {
   assert.ok(P.explainError(401).indexOf('Key 无效') >= 0);
