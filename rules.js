@@ -492,29 +492,29 @@
     return out;
   }
 
-  function dailyList(state, today) {
+  /* 某一天该做的清单（不看成没看勾） */
+  function buildDayTasks(state, iso) {
     state = state || {};
-    var done = state.done || {};
     var list = [];
-    var todays = todayCourseList(state, today);
+    var todays = todayCourseList(state, iso);
     var hasEnglish = false;
 
     todays.forEach(function (x) {
       var c = x.course;
       if (c.id === 'english') hasEnglish = true;
-      var when = x.period ? ('今天 ' + x.period + ' 上课') : '今天有课';
+      var when = x.period ? ('当天 ' + x.period + ' 上课') : '当天有课';
       list.push({
-        id: today + '#' + c.id + '#pre',
+        id: iso + '#' + c.id + '#pre',
         kind: 'pre',
         courseId: c.id,
         courseName: c.name,
         title: '课前预习：' + c.name,
-        reason: when + '，课前把上次讲的扫一遍，今天要讲的地方先看个眼熟',
+        reason: when + '，课前把上次讲的扫一遍，要讲的地方先看个眼熟',
         period: x.period,
         prio: 10
       });
       list.push({
-        id: today + '#' + c.id + '#rev',
+        id: iso + '#' + c.id + '#rev',
         kind: 'rev',
         courseId: c.id,
         courseName: c.name,
@@ -527,7 +527,7 @@
 
     if (!hasEnglish) {
       list.unshift({
-        id: today + '#english#daily',
+        id: iso + '#english#daily',
         kind: 'en',
         courseId: 'english',
         courseName: '英语',
@@ -537,12 +537,43 @@
         prio: 15
       });
     }
+    return { list: list, courses: todays, hasEnglish: hasEnglish };
+  }
+
+  /* 保质期：当天生成，之后两天还留着，第 4 天消失 */
+  var CARRY_DAYS = 3;
+
+  function dailyList(state, today) {
+    state = state || {};
+    var done = state.done || {};
+    var today0 = buildDayTasks(state, today);
+    var list = today0.list.filter(function (t) { return !done[t.id]; });
+
+    var carry = [];
+    for (var o = 1; o < CARRY_DAYS; o++) {
+      var iso = addDays(today, -o);
+      buildDayTasks(state, iso).list.forEach(function (t) {
+        if (done[t.id]) return;
+        var x = {};
+        for (var k in t) x[k] = t[k];
+        x.carryFrom = iso;
+        x.ageDays = o;
+        x.daysLeft = CARRY_DAYS - o;   // 昨天剩 2 天，前天剩 1 天
+        carry.push(x);
+      });
+    }
+    carry.sort(function (a, b) {
+      if (a.carryFrom !== b.carryFrom) return a.carryFrom < b.carryFrom ? -1 : 1; // 越老越靠前
+      return a.prio - b.prio;
+    });
 
     return {
-      list: list.filter(function (t) { return !done[t.id]; }),
-      all: list,
-      courses: todays,
-      hasEnglish: hasEnglish
+      list: list,
+      carry: carry,
+      all: today0.list,
+      courses: today0.courses,
+      hasEnglish: today0.hasEnglish,
+      carryDays: CARRY_DAYS
     };
   }
 
