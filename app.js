@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v14 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v15 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -170,7 +170,7 @@
       '</div>' + confirmBar(id, pend);
   }
 
-  function taskHTML(t, rank) {
+  function taskHTML(t, rank, note) {
     var done = !!state.done[t.id];
     var pend = pendingDone === t.id;
     var tagClass = t.prio >= 100 ? 'hot' : t.prio >= 60 ? 'warm' : '';
@@ -178,6 +178,12 @@
     meta.push('<span class="tag ' + tagClass + '">' + esc(KIND_LABEL[t.kind] || t.kind) + '</span>');
     if (t.courseName && t.courseName !== (KIND_LABEL[t.kind] || t.kind)) {
       meta.push('<span>' + esc(t.courseName) + '</span>');
+    }
+    if (note) {
+      var notes = Array.isArray(note) ? note : [note];
+      notes.forEach(function (n) {
+        if (n) meta.push('<span class="tag warm">' + esc(n) + '</span>');
+      });
     }
     if (t.estMin) meta.push('<span>约 ' + t.estMin + ' 分钟</span>');
     return '' +
@@ -249,6 +255,19 @@
     } else {
       html += '<div class="h">今天要做</div><div class="card empty">' +
         '<div class="big">清空了</div>今天排到的都做完了，往下看看下一次课。</div>';
+    }
+
+    /* 前两天没做完的：留 3 天，勾掉或到期就消失 */
+    if (daily.carry && daily.carry.length) {
+      html += '<div class="h">没做完的 <span class="n">' + daily.carry.length +
+        ' 件 · 留 3 天</span></div><div class="card">';
+      daily.carry.forEach(function (t) {
+        html += taskHTML(t, 0, [
+          R.fmtCN(t.carryFrom) + ' 留下的',
+          t.daysLeft <= 1 ? '今天就消失' : '还剩 ' + t.daysLeft + ' 天'
+        ]);
+      });
+      html += '</div>';
     }
 
     /* 下一次课：只给时间地点，不再报章节进度 */
@@ -697,7 +716,8 @@
   /* 打字/粘贴一句话 → 边写边认 → 确认后入表（不联网、不用 Key） */
   function startType() {
     openSheet('<h3>写一句话，我来认</h3>' +
-      '<div class="sub">一行一条，比如「高数习题 4.1 周三前交」「英语作文周五，写 200 词」。不用 Key、不联网。</div>' +
+      '<div class="sub">一行一条，比如「高数习题 4.1 周三前交」「英语作文 3 小时后交」。' +
+      (hasKey() ? '填了 Key：点「认一下」会先让模型读一遍，更准。' : '不填 Key 也能用，纯本地规则。') + '</div>' +
       '<textarea id="typeBox" class="ta" rows="3" placeholder="在这里打字或粘贴…"></textarea>' +
       '<div id="typePrev" class="prev"></div>' +
       '<div class="acts"><button data-sheet="close">取消</button>' +
@@ -741,8 +761,29 @@
   function submitType() {
     var box = $('#typeBox');
     if (!box) return;
-    var r = Parse.parseText(box.value, { today: viewDate, courses: state.courses });
-    showResult(r);
+    var txt = String(box.value || '').trim();
+    if (!txt) return toast('先写一句，比如「英语作文周五交」');
+
+    var local = Parse.parseText(txt, { today: viewDate, courses: state.courses });
+
+    /* 填了 Key 就先让模型读一遍（更准）；没网/没 Key/出错就退回本地规则 */
+    if (!hasKey()) {
+      showResult(local);
+      return;
+    }
+    openSheet('<h3>正在认这段话…</h3><div class="sub">交给模型读一遍，通常 2–5 秒；不通就自动退回本地规则</div>');
+    postVision(Parse.buildTextMessages(txt, state.courses.map(function (c) { return c.name; }), viewDate))
+      .then(function (text) {
+        var r = Parse.normalizeResult(text, { today: viewDate, courses: state.courses });
+        if (!r.tasks || !r.tasks.length) throw new Error('模型没给出条目');
+        r.warnings = (r.warnings || []).concat([]);
+        showResult(r);
+      })
+      .catch(function (err) {
+        local.warnings = ['模型这次没用上（' + (err && err.message ? err.message : '未知原因') + '），下面是本地规则认的，检查一下']
+          .concat(local.warnings || []);
+        showResult(local);
+      });
   }
 
   /* 确认卡：可能有多条 —— 每条一行，改哪条都行，删掉也行 */
