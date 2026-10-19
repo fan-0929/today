@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v12 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v13 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -204,10 +204,12 @@
       html += '<div class="chips"><span class="chip">今天没课</span></div>';
     }
 
-    /* 拍照 / 选截图 → 认出作业 → 确认后入表 */
+    /* 两条入口：拍照认字（要 Key）/ 自己打一句话（不要 Key） */
     html += '<div class="shotbar">' +
-      '<button class="shot" data-act="shoot">📷 拍照 / 选截图加作业' +
-      '<small>' + (hasKey() ? '交给模型认字，你确认一下再进作业表' : '先在设置里填一个 Key') + '</small></button>' +
+      '<button class="shot" data-act="shoot">📷 拍照 / 截图' +
+      '<small>' + (hasKey() ? '模型认字，你再确认' : '先在设置里填 Key') + '</small></button>' +
+      '<button class="shot" data-act="type">✍ 打字加作业' +
+      '<small>不用 Key、不联网</small></button>' +
       '</div>';
 
     /* 作业台账：按截止时间从早到晚，就在今日清单前面 */
@@ -682,6 +684,53 @@
     });
   }
 
+  /* 打字/粘贴一句话 → 边写边认 → 确认后入表（不联网、不用 Key） */
+  function startType() {
+    openSheet('<h3>写一句话，我来认</h3>' +
+      '<div class="sub">一行一条，比如「高数习题 4.1 周三前交」「英语作文周五，写 200 词」。不用 Key、不联网。</div>' +
+      '<textarea id="typeBox" class="ta" rows="3" placeholder="在这里打字或粘贴…"></textarea>' +
+      '<div id="typePrev" class="prev"></div>' +
+      '<div class="acts"><button data-sheet="close">取消</button>' +
+      '<button class="primary" id="typeGo" data-act="typeGo" disabled>认一下</button></div>');
+    var box = $('#typeBox');
+    if (box) {
+      box.addEventListener('input', function () { previewType(); });
+      try { box.focus(); } catch (e) { /* 手机键盘弹不弹随它 */ }
+    }
+  }
+
+  function previewType() {
+    var box = $('#typeBox');
+    var out = $('#typePrev');
+    var go = $('#typeGo');
+    if (!box || !out) return;
+    var txt = box.value;
+    if (!txt.trim()) {
+      out.innerHTML = '';
+      if (go) go.disabled = true;
+      return;
+    }
+    var r = Parse.parseText(txt, { today: viewDate, courses: state.courses });
+    if (!r.tasks.length) {
+      out.innerHTML = '<div class="warn">还没认出能当作业的内容，多写几个字试试</div>';
+      if (go) go.disabled = true;
+      return;
+    }
+    out.innerHTML = r.tasks.map(function (t) {
+      return '<div class="prevrow"><b>' + esc(t.courseName || '不确定哪门课') + '</b>' +
+        '<span>' + esc(t.title) + '</span>' +
+        '<em>' + esc(t.dueOn.slice(5).replace('-', '/')) + ' · ' + t.estMin + ' 分钟</em></div>';
+    }).join('');
+    if (go) go.disabled = false;
+  }
+
+  function submitType() {
+    var box = $('#typeBox');
+    if (!box) return;
+    var r = Parse.parseText(box.value, { today: viewDate, courses: state.courses });
+    showResult(r);
+  }
+
   /* 确认卡：可能有多条 —— 每条一行，改哪条都行，删掉也行 */
   function courseOptions(selectedId) {
     var opts = '<option value="">（不确定，先不选）</option>';
@@ -812,6 +861,8 @@
       var a = act.getAttribute('data-act');
       if (a === 'baseline') setBaseline();
       else if (a === 'shoot') startShot();
+      else if (a === 'type') startType();
+      else if (a === 'typeGo') submitType();
       else if (a === 'confirmDone') commitDone(act.getAttribute('data-id'));
       else if (a === 'cancelDone') { pendingDone = null; render(); }
       return;
