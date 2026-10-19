@@ -1,0 +1,19 @@
+{
+  "name": "今天做什么",
+  "short_name": "今天做什么",
+  "description": "按真实课表和教学大纲，算出今天该做什么。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f3ec",
+  "theme_color": "#f6f3ec",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

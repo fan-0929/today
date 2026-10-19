@@ -1,0 +1,340 @@
+/* 规则层单测：node test-rules.js（零依赖，直接用 node:assert） */
+'use strict';
+var assert = require('assert');
+var R = require('./rules.js');
+
+var pass = 0;
+var fail = 0;
+var failures = [];
+
+function test(name, fn) {
+  try {
+    fn();
+    pass++;
+    console.log('  ok   ' + name);
+  } catch (e) {
+    fail++;
+    failures.push(name + ' → ' + e.message);
+    console.log('  FAIL ' + name + '\n       ' + e.message);
+  }
+}
+
+function fixture() {
+  return {
+    version: 1,
+    termStart: '2026-09-07', // 周一
+    courses: [
+      {
+        id: 'math',
+        name: '高等数学',
+        slots: [{ day: 1 }, { day: 3 }],
+        outline: [
+          { id: 'a', title: '第一章 函数与极限', sessions: 2 },
+          { id: 'b', title: '第二章 导数与微分', sessions: 3 }
+        ]
+      }
+    ],
+    homework: [],
+    done: {}
+  };
+}
+
+/* ---------------- 日期工具 ---------------- */
+
+test('addDays 跨月', function () {
+  assert.strictEqual(R.addDays('2026-09-30', 1), '2026-10-01');
+  assert.strictEqual(R.addDays('2026-03-01', -1), '2026-02-28');
+});
+
+test('isoWeekday 周一=1 周日=7', function () {
+  assert.strictEqual(R.isoWeekday('2026-09-07'), 1);
+  assert.strictEqual(R.isoWeekday('2026-09-13'), 7);
+});
+
+test('diffDays 方向正确', function () {
+  assert.strictEqual(R.diffDays('2026-09-07', '2026-09-09'), 2);
+  assert.strictEqual(R.diffDays('2026-09-09', '2026-09-07'), -2);
+});
+
+test('termWeek 第几周', function () {
+  assert.strictEqual(R.termWeek('2026-09-07', '2026-09-07'), 1);
+  assert.strictEqual(R.termWeek('2026-09-07', '2026-09-14'), 2);
+  assert.strictEqual(R.termWeek('2026-09-07', '2026-09-13'), 1);
+});
+
+/* ---------------- 课表 → 上课日期 ---------------- */
+
+test('courseDatesBefore 只挑课表上的星期', function () {
+  var c = fixture().courses[0];
+  assert.deepStrictEqual(R.courseDatesBefore(c, '2026-09-07', '2026-09-16'), [
+    '2026-09-07', '2026-09-09', '2026-09-14', '2026-09-16'
+  ]);
+});
+
+test('courseDatesBefore 不越过 until', function () {
+  var c = fixture().courses[0];
+  assert.deepStrictEqual(R.courseDatesBefore(c, '2026-09-07', '2026-09-10'), [
+    '2026-09-07', '2026-09-09'
+  ]);
+});
+
+test('courseDatesBefore 空课表返回空数组', function () {
+  assert.deepStrictEqual(R.courseDatesBefore({ slots: [] }, '2026-09-07', '2026-10-01'), []);
+});
+
+test('sessionNoOn 今天有课/没课', function () {
+  var c = fixture().courses[0];
+  assert.strictEqual(R.sessionNoOn(c, '2026-09-07', '2026-09-09'), 2);
+  assert.strictEqual(R.sessionNoOn(c, '2026-09-07', '2026-09-08'), 0);
+});
+
+/* ---------------- 大纲 → 章节 ---------------- */
+
+test('chapterAt 落在正确章节', function () {
+  var o = fixture().courses[0].outline;
+  var r1 = R.chapterAt(o, 1);
+  assert.strictEqual(r1.chapter.id, 'a');
+  assert.strictEqual(r1.sessionInChapter, 1);
+  assert.strictEqual(r1.totalInChapter, 2);
+
+  var r3 = R.chapterAt(o, 3);
+  assert.strictEqual(r3.chapter.id, 'b');
+  assert.strictEqual(r3.sessionInChapter, 1);
+
+  var r5 = R.chapterAt(o, 5);
+  assert.strictEqual(r5.chapter.id, 'b');
+  assert.strictEqual(r5.sessionInChapter, 3);
+});
+
+test('chapterAt 超出大纲返回 null', function () {
+  assert.strictEqual(R.chapterAt(fixture().courses[0].outline, 6), null);
+});
+
+test('totalSessions 累加', function () {
+  assert.strictEqual(R.totalSessions(fixture().courses[0].outline), 5);
+});
+
+/* ---------------- 今日任务生成 ---------------- */
+
+test('今天有课：预习 + 课后 + 顺延，按优先级排序', function () {
+  var st = fixture();
+  var r = R.buildTasks(st, '2026-09-09'); // 周三，第 2 次课
+  assert.strictEqual(r.hasClassToday.length, 1);
+  assert.strictEqual(r.hasClassToday[0].k, 2);
+
+  var kinds = r.all.map(function (t) { return t.kind; });
+  assert.deepStrictEqual(kinds, ['review-after', 'carry', 'preview']);
+
+  // 课后 > 顺延 > 预习
+  assert.ok(r.all[0].prio > r.all[1].prio);
+  assert.ok(r.all[1].prio > r.all[2].prio);
+  assert.strictEqual(r.top3.length, 3);
+  assert.strictEqual(r.doneTop, 0);
+});
+
+test('上一次课的复习已勾 → 不再生成顺延', function () {
+  var st = fixture();
+  st.done['2026-09-07#math#review-after#a'] = 1;
+  var r = R.buildTasks(st, '2026-09-09');
+  var kinds = r.all.map(function (t) { return t.kind; });
+  assert.deepStrictEqual(kinds, ['review-after', 'preview']);
+});
+
+test('连欠 2 节课后复习 → 记为逾期并被排到前面', function () {
+  var st = fixture();
+  var r = R.buildTasks(st, '2026-09-21'); // 第 5 次课，前两节都没勾
+  var carry = r.all.filter(function (t) { return t.kind === 'carry'; })[0];
+  assert.ok(carry, '应该有一条顺延任务');
+  assert.ok(carry.prio === R.PRIO.reviewCarryOverdue, 'prio 应为 90，实际 ' + carry.prio);
+  assert.ok(carry.title.indexOf('逾期') >= 0, '标题应含「逾期」，实际 ' + carry.title);
+  assert.strictEqual(carry.pendingCount, 4);
+  // 顺延逾期(90) 应排在今天课后(60) 前面
+  assert.strictEqual(r.all[0].kind, 'carry');
+});
+
+test('逾期作业优先级最高，排第一', function () {
+  var st = fixture();
+  st.homework = [
+    { id: 'h1', courseId: 'math', title: '习题 1.4', dueOn: '2026-09-07', estMin: 30 }
+  ];
+  var r = R.buildTasks(st, '2026-09-09');
+  assert.strictEqual(r.all[0].kind, 'hw-overdue');
+  assert.strictEqual(r.all[0].prio, R.PRIO.hwOverdue);
+  assert.ok(r.all[0].reason.indexOf('逾期') >= 0);
+});
+
+test('未来才到期的作业不进今日清单', function () {
+  var st = fixture();
+  st.homework = [
+    { id: 'h2', courseId: 'math', title: '习题 1.5', dueOn: '2026-09-20' }
+  ];
+  var r = R.buildTasks(st, '2026-09-09');
+  assert.strictEqual(r.all.filter(function (t) { return t.kind.indexOf('hw') === 0; }).length, 0);
+});
+
+test('已完成的作业不再出现', function () {
+  var st = fixture();
+  st.homework = [
+    { id: 'h3', courseId: 'math', title: '习题 1.6', dueOn: '2026-09-09', done: true }
+  ];
+  var r = R.buildTasks(st, '2026-09-09');
+  assert.strictEqual(r.all.filter(function (t) { return t.kind.indexOf('hw') === 0; }).length, 0);
+});
+
+test('没课且无积压 → 给一条提前量，页面不空', function () {
+  var st = fixture();
+  st.done['2026-09-07#math#review-after#a'] = 1;
+  var r = R.buildTasks(st, '2026-09-08'); // 周二没课
+  assert.strictEqual(r.hasClassToday.length, 0);
+  assert.strictEqual(r.all.length, 1);
+  assert.strictEqual(r.all[0].kind, 'ahead');
+  assert.ok(r.all[0].reason.indexOf('9月9日') >= 0, '理由应给出下次课日期，实际 ' + r.all[0].reason);
+});
+
+test('大纲讲完 → 转总复习任务，不再按课次算章节', function () {
+  var st = fixture();
+  var r = R.buildTasks(st, '2026-09-28'); // 第 7 次课，超出 5 次大纲
+  var wrap = r.all.filter(function (t) { return t.kind === 'wrapup'; })[0];
+  assert.ok(wrap, '应有一条总复习任务');
+});
+
+test('勾掉之后任务不再出现在列表里', function () {
+  var st = fixture();
+  var before = R.buildTasks(st, '2026-09-09');
+  var id = before.all[0].id;
+  st.done[id] = 1;
+  var after = R.buildTasks(st, '2026-09-09');
+  assert.strictEqual(after.all.filter(function (t) { return t.id === id; }).length, 0);
+});
+
+/* ---------------- 进度账 ---------------- */
+
+test('courseStats 统计应到/实到/落后', function () {
+  var st = fixture();
+  st.done['2026-09-07#math#review-after#a'] = 1;
+  var s = R.courseStats(st, '2026-09-09')[0];
+  assert.strictEqual(s.planK, 2);
+  assert.strictEqual(s.actual, 1);
+  assert.strictEqual(s.behind, 1);
+  assert.strictEqual(s.limit, 5);
+});
+
+test('courseStats 全部勾完 → 无落后', function () {
+  var st = fixture();
+  st.done['2026-09-07#math#review-after#a'] = 1;
+  st.done['2026-09-09#math#review-after#a'] = 1;
+  var s = R.courseStats(st, '2026-09-09')[0];
+  assert.strictEqual(s.behind, 0);
+});
+
+test('upcomingSummary 给出未来 7 天的课', function () {
+  var st = fixture();
+  var up = R.upcomingSummary(st, '2026-09-08');
+  assert.ok(up.length >= 2, '未来 7 天应有至少 2 次课，实际 ' + up.length);
+  assert.strictEqual(up[0].date, '2026-09-09');
+});
+
+/* ---------------- 周次过滤（真实课表要按 1-8 周 / 9-16 周 / 单双周切断） ---------------- */
+
+test('fromWeek/toWeek：1-8 周的课到第 9 周就该消失', function () {
+  var c = { slots: [{ day: 5, fromWeek: 1, toWeek: 8 }] };
+  var dates = R.courseDatesBefore(c, '2026-09-07', '2027-01-20');
+  assert.strictEqual(dates.length, 8);
+  assert.strictEqual(dates[0], '2026-09-11'); // 周五
+  assert.strictEqual(dates[7], '2026-10-30'); // 第 8 周周五
+  assert.strictEqual(R.sessionNoOn(c, '2026-09-07', '2026-11-06'), 0); // 第 9 周没课
+});
+
+test('weeks 指定周次：形势与政策只上 4/8/12/16 周', function () {
+  var c = { slots: [{ day: 4, weeks: [4, 8, 12, 16] }] };
+  var dates = R.courseDatesBefore(c, '2026-09-07', '2027-01-20');
+  assert.deepStrictEqual(dates, ['2026-10-01', '2026-10-29', '2026-11-26', '2026-12-24']);
+  assert.strictEqual(R.sessionNoOn(c, '2026-09-07', '2026-10-01'), 1);
+  assert.strictEqual(R.sessionNoOn(c, '2026-09-07', '2026-10-08'), 0);
+});
+
+test('parity 单双周', function () {
+  var c = { slots: [{ day: 3, parity: 'odd' }] };
+  var dates = R.courseDatesBefore(c, '2026-09-07', '2026-10-15');
+  assert.deepStrictEqual(dates, ['2026-09-09', '2026-09-23', '2026-10-07']); // 第 1/3/5 周
+});
+
+test('termStart 不是周一时也能正确按周排', function () {
+  var c = { slots: [{ day: 1 }, { day: 3 }] };
+  // 2026-09-09 是周三，归一化后第 1 周周一仍是 09-07
+  assert.deepStrictEqual(
+    R.courseDatesBefore(c, '2026-09-09', '2026-09-16'),
+    ['2026-09-09', '2026-09-14', '2026-09-16']
+  );
+});
+
+/* ---------------- 复习起点（ignoredBefore）与「下一次课」 ---------------- */
+
+function longFixture() {
+  return {
+    version: 1,
+    termStart: '2026-09-07', // 周一
+    courses: [{
+      id: 'math',
+      name: '高等数学',
+      slots: [{ day: 1 }, { day: 3 }],
+      outline: [{ id: 'a', title: '第一章 函数与极限', sessions: 20 }]
+    }],
+    homework: [],
+    done: {}
+  };
+}
+
+test('没有起点设置时，没勾的历史课次会变成顺延任务', function () {
+  var r = R.buildTasks(longFixture(), '2026-10-14');
+  var carry = r.all.filter(function (t) { return t.kind === R.KIND.CARRY; });
+  assert.strictEqual(carry.length, 1, '应该有 1 条顺延');
+});
+
+test('ignoredBefore：起点之前的课次不再算欠账', function () {
+  var s = longFixture();
+  s.ignoredBefore = '2026-10-14';
+  var r = R.buildTasks(s, '2026-10-14');
+  assert.strictEqual(r.all.filter(function (t) { return t.kind === R.KIND.CARRY; }).length, 0);
+});
+
+test('ignoredBefore 不影响当天的课后复习', function () {
+  var s = longFixture();
+  s.ignoredBefore = '2026-10-14';
+  var r = R.buildTasks(s, '2026-10-14');
+  assert.ok(r.all.some(function (t) { return t.kind === R.KIND.REVIEW; }), '当天课后复习必须保留');
+});
+
+test('起点之后重新累计：再过一周，两节课没勾又算欠', function () {
+  var s = longFixture();
+  s.ignoredBefore = '2026-10-14';
+  var carry = R.buildTasks(s, '2026-10-21').all.filter(function (t) { return t.kind === R.KIND.CARRY; });
+  assert.strictEqual(carry.length, 1);
+  assert.strictEqual(carry[0].pendingCount, 2);
+});
+
+test('nextSessionAfter 只取今天之后的课，不返回今天', function () {
+  var n = R.nextSessionAfter(longFixture(), '2026-10-14'); // 这天周三有课
+  assert.ok(n, '应该能找到下一节课');
+  assert.strictEqual(n.date, '2026-10-19');
+  assert.strictEqual(n.k, 13);
+});
+
+test('复习起点后，应到只从起点算，章节定位仍按真实课次', function () {
+  var s = longFixture();
+  s.ignoredBefore = '2026-10-14';
+  var t = R.courseStats(s, '2026-10-14')[0];
+  assert.strictEqual(t.skipped, 11, '起点前 11 次');
+  assert.strictEqual(t.planK, 1, '只算当天这 1 次');
+  assert.strictEqual(t.behind, 1, '当天还没勾 → 落后 1');
+  assert.ok(t.nowChapter, '章节定位不受起点影响');
+});
+
+/* ---------------- 汇总 ---------------- */
+
+console.log('\n通过 ' + pass + '，失败 ' + fail);
+if (fail) {
+  console.log('\n失败明细：');
+  failures.forEach(function (f) { console.log(' - ' + f); });
+  process.exit(1);
+}
