@@ -283,6 +283,23 @@
     }];
   }
 
+  /* 用户自己打的一段字 → 同样的 JSON 契约，只是没有图 */
+  function buildTextPrompt(courseNames, today) {
+    return buildPrompt(courseNames, today)
+      .replace('看图里的文字，把「要学生做的事」一条条列出来',
+        '读下面学生自己打的一段话，把「要学生做的事」一条条列出来')
+      .replace('{"tasks":[{"course":"课程名","title":"要做什么","dueOn":"YYYY-MM-DD","estMin":数字,"raw":"这条对应的原文"}],',
+        '{"tasks":[{"course":"课程名","title":"要做什么","dueOn":"YYYY-MM-DD","dueTime":"HH:MM 或空","estMin":数字,"raw":"这条对应的原文"}],')
+      + '\n补充：输入是一段手打的文字，可能一行一条、也可能连着写；「今晚 8 点」「3 小时后」「剩两小时」这类要换算成具体几点（dueTime）；一条都认不出就返回 {"tasks":[]}。';
+  }
+
+  function buildTextMessages(text, courseNames, today) {
+    return [{
+      role: 'user',
+      content: buildTextPrompt(courseNames, today) + '\n\n要解析的文字：\n' + String(text == null ? '' : text).slice(0, 1500)
+    }];
+  }
+
   /* ---------- 模型返回清洗 ---------- */
 
   /** 从可能夹着废话的文本里抠出第一个 JSON 对象 */
@@ -690,6 +707,8 @@
     estMinGuess: estMinGuess,
     buildPrompt: buildPrompt,
     buildMessages: buildMessages,
+    buildTextPrompt: buildTextPrompt,
+    buildTextMessages: buildTextMessages,
     buildRequestBody: buildRequestBody,
     extractJSON: extractJSON,
     normalizeResult: normalizeResult,
