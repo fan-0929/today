@@ -163,6 +163,13 @@
       return addDays(today, delta);
     }
 
+    // 只说「下周 / 下周内」「本周」，没给星期几
+    var w2 = s.match(/(下{1,2}|本|这)\s*(个)?\s*(周|星期|礼拜)(内|之前|前|交|$)/);
+    if (w2) {
+      if (w2[1].indexOf('下') >= 0) return addDays(today, 7 * w2[1].length);
+      return addDays(today, 7 - isoWeekday(today)); // 本周 → 这周日
+    }
+
     if (/一周内|一周之内|本周内/.test(s)) return addDays(today, 7);
     return null;
   }
@@ -420,6 +427,147 @@
     };
   }
 
+  /* ---------- 纯文字解析：不联网、不花 Key ---------- */
+
+  /** 课程名 → 它所有的口语别名（用于从标题里把课程名摘掉） */
+  function aliasOf(name) {
+    var out = [];
+    var n = clean(name);
+    if (!n) return out;
+    ALIAS.forEach(function (p) {
+      if (n.indexOf(clean(p[1])) >= 0) out.push(p[0]);
+    });
+    return out;
+  }
+
+  /** 从一句话里摘掉日期、课程名、口头语，留下「要做的事」 */
+  function titleFromText(seg, course) {
+    var s = String(seg == null ? '' : seg);
+
+    // 日期表达
+    s = s.replace(/20\d{2}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*日?/g, ' ');
+    s = s.replace(/\d{1,2}\s*[-/月]\s*\d{1,2}\s*日?/g, ' ');
+    s = s.replace(/(这|本|下{1,2})?\s*(个)?\s*(周|星期|礼拜)\s*[一二三四五六日天]/g, ' ');
+    s = s.replace(/(这|本|下{1,2})\s*(个)?\s*(周|星期|礼拜)(内|之前|前)?/g, ' ');
+    s = s.replace(/(今天|今晚|今日|大后天|后天|明天|明日)/g, ' ');
+    s = s.replace(/[一二三四五六七八九十\d]{1,3}\s*(日|天)内/g, ' ');
+
+    // 口头语与动词
+    s = s.replace(/^(要|得|需|需要|记得|别忘了|帮我|我|作业|任务|请大家)[\s:：]*/g, '');
+    s = s.replace(/(之前|以前)\s*(交|提交|上交|完成|做完)?/g, ' ');
+    s = s.replace(/(前|之前|以前)?\s*(交|提交|上交|截止|deadline)\s*$/gi, ' ');
+    s = s.replace(/^\s*(交|提交|上交)\s*/g, ' ');
+    s = tidy(s);
+
+    // 课程名和别名：挨个试着摘，挑「摘得最干净但仍说得清」的那个
+    // （「大物实验报告」→「实验报告」好过原样留着；「英语作文」→「作文」就该拦住）
+    if (course) {
+      var base = s;
+      var best = '';
+      var names = [course.name].concat(aliasOf(course.name));
+      names.forEach(function (n) {
+        var raw = String(n || '').trim();
+        if (raw.length < 2) return;
+        var cands = [raw];
+        if (raw.length > 2) cands.push(raw.slice(0, 2));   // 大物实验 → 大物
+        cands.forEach(function (c) {
+          var q = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (!q) return;
+          var t = tidy(base.replace(new RegExp(q, 'gi'), ' '));
+          if (t.length >= 3 && t !== base && (!best || t.length < best.length)) best = t;
+        });
+      });
+      if (best) s = best;
+    }
+
+    return s.slice(0, MAX_TITLE);
+  }
+
+  function tidy(s) {
+    return String(s)
+      .replace(/^[\s,，。、;；:：\-—·~～]+|[\s,，。、;；:：\-—·~～]+$/g, '')
+      .replace(/[（(]\s*[）)]/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  /** 把一段文字切成一条一条的句子 */
+  function splitSegments(text) {
+    var s = String(text == null ? '' : text).replace(/\r/g, '');
+    // 编号列表（1. / 2、/ 3)）当作分行
+    s = s.replace(/(^|[\n;；])\s*\d{1,2}\s*[.、)）]\s*/g, '\n');
+    var out = [];
+    s.split(/\n|;|；/).forEach(function (line) {
+      line = line.trim();
+      if (line) out.push(line);
+    });
+    return out;
+  }
+
+  /**
+   * 用户自己打/粘一段文字 → 直接解析成作业条目。
+   * 返回结构与 normalizeResult 一致：{ ok, draft, reason, tasks, warnings, raw }
+   */
+  function parseText(text, ctx) {
+    ctx = ctx || {};
+    var today = ctx.today || toISO(new Date());
+    var courses = ctx.courses || [];
+    var raw = String(text == null ? '' : text).slice(0, 400);
+    var warnings = [];
+    var tasks = [];
+    var flat = [];
+
+    // 一句话里塞了两门课时，再按逗号拆开
+    splitSegments(text).forEach(function (seg) {
+      var hits = 0;
+      courses.forEach(function (c) { if (matchCourse(seg, [c])) hits++; });
+      if (hits < 2) {
+        flat.push(seg);
+      } else {
+        seg.split(/[,，、]/).forEach(function (p) {
+          if (p.trim()) flat.push(p.trim());
+        });
+      }
+    });
+
+    flat.forEach(function (seg, idx) {
+      if (tasks.length >= MAX_TASKS) return;
+      var course = matchCourse(seg, courses);
+      var dueOn = parseDueDate(seg, today);
+      var title = titleFromText(seg, course) || String(seg).slice(0, MAX_TITLE);
+      var pre = flat.length > 1 ? '第 ' + (idx + 1) + ' 条：' : '';
+
+      if (!course) warnings.push(pre + '没认出是哪门课，先选了「不确定」，你改一下');
+      if (!dueOn) {
+        warnings.push(pre + '没写截止日期，先按明天算');
+        dueOn = addDays(today, 1);
+      } else if (diffDays(today, dueOn) < 0) {
+        warnings.push(pre + '写的日期已经过去了，改成明天');
+        dueOn = addDays(today, 1);
+      }
+
+      tasks.push({
+        courseId: course ? course.id : '',
+        courseName: course ? course.name : '',
+        title: title,
+        dueOn: dueOn,
+        estMin: estMinGuess(title)
+      });
+    });
+
+    if (!tasks.length) {
+      return {
+        ok: false,
+        draft: false,
+        reason: 'no-task',
+        tasks: [],
+        warnings: ['这段文字里没找到能当作业的内容，多写几个字试试'],
+        raw: raw
+      };
+    }
+    return { ok: true, draft: false, tasks: tasks, warnings: warnings, raw: raw };
+  }
+
   /* ---------- 请求体 / 错误归因 ---------- */
 
   /* 智谱对 max_tokens 有上限（glm-4v-flash 只允许 1~1024），写 1500 会直接被拒 */
@@ -473,6 +621,9 @@
     pickTaskArray: pickTaskArray,
     fallbackTasks: fallbackTasks,
     explainError: explainError,
+    parseText: parseText,
+    titleFromText: titleFromText,
+    splitSegments: splitSegments,
     ALIAS: ALIAS
   };
 });
