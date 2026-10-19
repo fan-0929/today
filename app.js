@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v13 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v14 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -141,7 +141,17 @@
     var pend = pendingDone === id;
     var badge, cls = '';
     if (x.state === 'overdue') { badge = '逾期 ' + x.daysLeft + ' 天'; cls = 'hot'; }
-    else if (x.state === 'today') { badge = '今天到期'; cls = 'hot'; }
+    else if (x.state === 'today') {
+      if (x.hoursLeft != null) {
+        var hl = x.hoursLeft;
+        if (hl <= 0) { badge = '今天 ' + x.dueTime + ' 已过'; cls = 'hot'; }
+        else if (hl < 1) { badge = '还剩 ' + Math.max(1, Math.round(hl * 60)) + ' 分钟'; cls = 'hot'; }
+        else { badge = '还剩 ' + (Math.round(hl * 10) / 10) + ' 小时'; cls = 'hot'; }
+      } else {
+        badge = '今天到期';
+        cls = 'hot';
+      }
+    }
     else if (x.daysLeft === -1) { badge = '明天到期'; cls = 'warm'; }
     else { badge = '还有 ' + (-x.daysLeft) + ' 天'; }
     return '' +
@@ -151,7 +161,7 @@
             esc(x.hw.title) + '</div>' +
           '<div class="meta">' +
             '<span class="tag ' + cls + '">' + esc(badge) + '</span>' +
-            '<span>' + esc(R.fmtCN(x.dueOn)) + '</span>' +
+            '<span>' + esc(dueLabel(x.dueOn, x.dueTime)) + '</span>' +
             '<span>' + esc(x.courseName) + '</span>' +
             (alsoToday ? '<span class="tag">也在今日清单</span>' : '') +
           '</div>' +
@@ -691,7 +701,7 @@
       '<textarea id="typeBox" class="ta" rows="3" placeholder="在这里打字或粘贴…"></textarea>' +
       '<div id="typePrev" class="prev"></div>' +
       '<div class="acts"><button data-sheet="close">取消</button>' +
-      '<button class="primary" id="typeGo" data-act="typeGo" disabled>认一下</button></div>');
+      '<button class="primary" id="typeGo" data-act="typeGo">认一下</button></div>');
     var box = $('#typeBox');
     if (box) {
       box.addEventListener('input', function () { previewType(); });
@@ -702,26 +712,30 @@
   function previewType() {
     var box = $('#typeBox');
     var out = $('#typePrev');
-    var go = $('#typeGo');
     if (!box || !out) return;
     var txt = box.value;
     if (!txt.trim()) {
       out.innerHTML = '';
-      if (go) go.disabled = true;
       return;
     }
     var r = Parse.parseText(txt, { today: viewDate, courses: state.courses });
     if (!r.tasks.length) {
-      out.innerHTML = '<div class="warn">还没认出能当作业的内容，多写几个字试试</div>';
-      if (go) go.disabled = true;
+      out.innerHTML = '<div class="warn">还没认出能当作业的内容，多写几个字试试（比如「英语作文周五交」）</div>';
       return;
     }
     out.innerHTML = r.tasks.map(function (t) {
       return '<div class="prevrow"><b>' + esc(t.courseName || '不确定哪门课') + '</b>' +
         '<span>' + esc(t.title) + '</span>' +
-        '<em>' + esc(t.dueOn.slice(5).replace('-', '/')) + ' · ' + t.estMin + ' 分钟</em></div>';
+        '<em>' + esc(dueLabel(t.dueOn, t.dueTime)) + ' · ' + t.estMin + ' 分钟</em></div>';
     }).join('');
-    if (go) go.disabled = false;
+  }
+
+  /* 「今天 20:00」「明天」「10/28」这种给手机看的写法 */
+  function dueLabel(dueOn, dueTime) {
+    var base = dueOn === viewDate ? '今天'
+      : dueOn === R.addDays(viewDate, 1) ? '明天'
+        : dueOn.slice(5).replace('-', '/');
+    return dueTime ? base + ' ' + dueTime : base;
   }
 
   function submitType() {
@@ -748,8 +762,9 @@
         '<button class="del" data-sheet="drop" aria-label="删掉这条">✕</button></div>' +
       '<input data-f="title" value="' + esc(t.title) + '" placeholder="要做的事">' +
       '<div class="row2">' +
-        '<div><label>截止</label><input type="date" data-f="due" value="' + esc(t.dueOn) + '"></div>' +
-        '<div><label>分钟</label><input type="number" data-f="min" min="5" max="240" value="' + t.estMin + '"></div>' +
+        '<div data-w="date"><label>截止</label><input type="date" data-f="due" value="' + esc(t.dueOn) + '"></div>' +
+        '<div data-w="time"><label>几点（可空）</label><input type="time" data-f="time" value="' + esc(t.dueTime || '') + '"></div>' +
+        '<div data-w="min"><label>分钟</label><input type="number" data-f="min" min="5" max="240" value="' + t.estMin + '"></div>' +
       '</div>' +
     '</div>';
   }
@@ -762,7 +777,7 @@
         : '模型没给出能用的结果';
       openSheet('<h3>' + esc(why) + '</h3>' +
         '<div class="sub">换一张更清楚的图，或者直接手填一条。</div>' +
-        (r && r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
+        (r && r.raw ? '<details><summary>原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
         '<div class="acts"><button data-sheet="close">算了</button>' +
         '<button class="primary" data-sheet="retry">再试一张</button>' +
         '</div>');
@@ -773,7 +788,7 @@
     var head = r.draft
       ? '<h3>先把看到的内容列出来</h3><div class="sub">模型这次没给准话，但图里的字我读到了。改改标题、确认下日期就能用。</div>'
       : n > 1
-        ? '<h3>认出 ' + n + ' 条，逐条确认</h3><div class="sub">图里有多条作业，我都列出来了；多的删掉、漏的补一行</div>'
+        ? '<h3>认出 ' + n + ' 条，逐条确认</h3><div class="sub">这几条是我认出来的；多的删掉、漏的补一行</div>'
         : '<h3>认出来了，确认一下</h3><div class="sub">哪一项不对就改哪一项，改完再入库</div>';
 
     var body = '';
@@ -781,7 +796,7 @@
 
     openSheet(head + body +
       (r.warnings && r.warnings.length ? '<div class="warn">' + r.warnings.map(esc).join('<br>') + '</div>' : '') +
-      (r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
+      (r.raw ? '<details><summary>原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
       '<div class="acts"><button data-sheet="close">不要</button>' +
       '<button class="primary" data-sheet="save">全部加入（' + n + ' 条）</button></div>');
   }
@@ -799,12 +814,14 @@
       var title = String(pick('title') || '').replace(/[\s　]+/g, ' ').trim();
       if (!title) { skipped++; return; }
       var dueOn = pick('due') || R.addDays(viewDate, 1);
+      var dueTime = String(pick('time') || '').trim();
       var estMin = Number(pick('min')) || 30;
       state.homework.push({
         id: 'hw' + (base + i),
         courseId: pick('course') || '',
         title: title.slice(0, 60),
         dueOn: dueOn,
+        dueTime: dueTime,
         estMin: Math.max(5, Math.min(240, Math.round(estMin))),
         from: 'shot'
       });
@@ -947,7 +964,8 @@
     return;
   }
 
-  $('#view').addEventListener('click', onViewClick);
+  /* 绑在 document 上：确认卡（#sheet）在 #view 外面，绑 #view 就点不到「认一下」 */
+  document.addEventListener('click', onViewClick);
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.addEventListener('click', function () {
       clearPending();
