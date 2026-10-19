@@ -162,6 +162,12 @@
       html += '<div class="chips"><span class="chip">今天没课</span></div>';
     }
 
+    /* 拍照 / 选截图 → 认出作业 → 确认后入表 */
+    html += '<div class="shotbar">' +
+      '<button class="shot" data-act="shoot">📷 拍照 / 选截图加作业' +
+      '<small>' + (hasKey() ? '交给模型认字，你确认一下再进作业表' : '先在设置里填一个 Key') + '</small></button>' +
+      '</div>';
+
     /* 首次打开：历史课次会被算成积压，给一个「从今天开始」的出口 */
     if (!state.ignoredBefore && built.all.filter(function (t) { return t.kind === R.KIND.CARRY; }).length >= 4) {
       html += '<div class="card banner"><div class="bd"><b>第一次打开？</b>' +
@@ -306,6 +312,19 @@
       '<div class="btns"><button class="b" id="setTerm">保存开学日</button></div>' +
       '</div>';
 
+    html += '<div class="h">智能识别 <span class="n">' + (hasKey() ? '已填 Key' : '未填 Key') + '</span></div><div class="card">' +
+      '<div class="field"><label>智谱 API Key（只存这台手机，不进导出文件）</label>' +
+      '<input type="password" id="apiKey" autocomplete="off" placeholder="open.bigmodel.cn 控制台里的 Key" value="' + esc(apiKey()) + '">' +
+      '<div class="hint">拍照时要把这张图发给智谱的视觉模型（先在本地压到 1600px，照片里的位置信息 EXIF 已丢弃）。' +
+      (hasKey() ? '<br>当前：…' + esc(apiKey().slice(-4)) + '（已保存）'
+                : '<br>没填 Key 时，拍照按钮只会提示你去填，不会发任何东西出去。') +
+      '</div></div>' +
+      '<div class="field"><label>模型</label><input id="apiModel" value="' + esc(modelName()) + '">' +
+      '<div class="hint">默认 glm-4v-flash。若提示「模型名不对」，改成 glm-4v-plus 或 glm-4v 再试一次。</div></div>' +
+      '<div class="btns"><button class="b primary" id="saveKey">保存</button>' +
+      '<button class="b" id="testKey">测试连接</button>' +
+      (hasKey() ? '<button class="b danger" id="clearKey">清除 Key</button>' : '') + '</div></div>';
+
     html += '<div class="h">作业 <span class="n">' + (state.homework || []).length + ' 条</span></div><div class="card">';
     if (!(state.homework || []).length) {
       html += '<div class="empty" style="padding:16px 15px">还没有作业。只有「到期或逾期」的作业会进今日清单。</div>';
@@ -391,6 +410,23 @@
       toast('已加，到期那天会进今日清单');
       render();
     };
+
+    $('#saveKey').onclick = function () {
+      var k = ($('#apiKey').value || '').trim();
+      var m = ($('#apiModel').value || '').trim();
+      setApiKey(k);
+      setModelName(m);
+      toast(k ? '已保存，回今日页拍照试试' : '已清空 Key');
+      render();
+    };
+    $('#testKey').onclick = testConnection;
+    if ($('#clearKey')) {
+      $('#clearKey').onclick = function () {
+        setApiKey('');
+        toast('Key 已清除');
+        render();
+      };
+    }
 
     Array.prototype.forEach.call(document.querySelectorAll('[data-delhw]'), function (el) {
       el.onclick = function () {
@@ -490,6 +526,182 @@
     };
   }
 
+  /* ---------------- 智能识别：拍照 / 截图 → 任务 ---------------- */
+
+  var KEY_SLOT = 'today.key.v1';   // 模型 Key 单独存，不进 state、不进导出的 JSON
+  var MODEL_SLOT = 'today.model.v1';
+  var DEFAULT_MODEL = 'glm-4v-flash';
+  var API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+
+  function lsGet(k) {
+    try { return localStorage.getItem(k) || ''; } catch (e) { return ''; }
+  }
+  function lsSet(k, v) {
+    try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); }
+    catch (e) { /* 无痕模式可能不让写，忽略 */ }
+  }
+  function apiKey() { return lsGet(KEY_SLOT); }
+  function setApiKey(v) { lsSet(KEY_SLOT, v); }
+  function hasKey() { return !!apiKey(); }
+  function modelName() { return lsGet(MODEL_SLOT) || DEFAULT_MODEL; }
+  function setModelName(v) { lsSet(MODEL_SLOT, v || ''); }
+
+  function openSheet(html) {
+    $('#sheetIn').innerHTML = html;
+    $('#sheet').classList.add('on');
+    $('#backdrop').classList.add('on');
+  }
+  function closeSheet() {
+    $('#sheet').classList.remove('on');
+    $('#backdrop').classList.remove('on');
+  }
+
+  /** 长边压到 1600、JPEG 0.82：上传快，顺便把照片的 EXIF（含定位）丢掉 */
+  function compressImage(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var max = 1600;
+        var w = img.naturalWidth || img.width;
+        var h = img.naturalHeight || img.height;
+        if (!w || !h) { URL.revokeObjectURL(url); return reject(new Error('这张图读不出尺寸')); }
+        var scale = Math.min(1, max / Math.max(w, h));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        try { resolve(canvas.toDataURL('image/jpeg', 0.82)); }
+        catch (e) { reject(new Error('图片处理失败，换一张试试')); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('这张图打不开')); };
+      img.src = url;
+    });
+  }
+
+  function postVision(messages) {
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 30000) : null;
+    return fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey() },
+      body: JSON.stringify(Parse.buildRequestBody(modelName(), messages)),
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (res) {
+      return res.text().then(function (txt) { return { status: res.status, txt: txt }; });
+    }).then(function (r) {
+      if (timer) clearTimeout(timer);
+      if (r.status < 200 || r.status >= 300) throw new Error(Parse.explainError(r.status, r.txt));
+      var data;
+      try { data = JSON.parse(r.txt); } catch (e) { throw new Error('模型返回的不是 JSON'); }
+      var c = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : null;
+      if (!c) throw new Error('模型没返回内容');
+      return typeof c === 'string' ? c : JSON.stringify(c);
+    }).catch(function (err) {
+      if (timer) clearTimeout(timer);
+      if (err && err.name === 'AbortError') throw new Error('识别超时（30 秒）。图太大或网太慢，换一张小点的');
+      throw new Error(err && err.message ? err.message : Parse.explainError(0));
+    });
+  }
+
+  function startShot() {
+    if (!hasKey()) {
+      openSheet('<h3>先填一个 Key</h3>' +
+        '<div class="sub">拍照识别要调智谱的视觉模型。Key 只存在你这台手机上，不上传、也不进导出文件。</div>' +
+        '<div class="acts"><button data-sheet="close">算了</button>' +
+        '<button class="primary" data-sheet="goto-key">去设置填</button></div>');
+      return;
+    }
+    var input = $('#shotInput');
+    input.value = '';
+    input.click();
+  }
+
+  function onShot(file) {
+    if (!file) return;
+    openSheet('<h3>正在认这张图…</h3><div class="sub">压图 → 上传 → 解析，通常 3–8 秒</div><div id="shotThumb"></div>');
+    compressImage(file).then(function (dataUrl) {
+      var box = $('#shotThumb');
+      if (box) box.innerHTML = '<img class="thumb" alt="刚选的图" src="' + dataUrl + '">';
+      return postVision(Parse.buildMessages(
+        state.courses.map(function (c) { return c.name; }), viewDate, dataUrl));
+    }).then(function (text) {
+      showConfirm(Parse.normalizeResult(text, { today: viewDate, courses: state.courses }));
+    }).catch(function (err) {
+      openSheet('<h3>没认出来</h3><div class="sub">' + esc(err.message) + '</div>' +
+        '<div class="acts"><button data-sheet="close">知道了</button>' +
+        '<button class="primary" data-sheet="retry">再试一张</button></div>');
+    });
+  }
+
+  function showConfirm(r) {
+    if (!r || !r.ok) {
+      var why = !r ? '解析失败'
+        : r.reason === 'no-task' ? '图里没找到「要你做的事」'
+        : r.reason === 'no-title' ? '认出了字，但不知道要做什么'
+        : '模型没给出能用的结果';
+      openSheet('<h3>' + esc(why) + '</h3>' +
+        '<div class="sub">可以手填一条，或者换一张更清楚的图。</div>' +
+        (r && r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
+        '<div class="acts"><button data-sheet="close">算了</button>' +
+        '<button class="primary" data-sheet="manual">手动加一条</button></div>');
+      return;
+    }
+    var t = r.task;
+    var opts = '<option value="">（请选择课程）</option>';
+    state.courses.forEach(function (c) {
+      opts += '<option value="' + esc(c.id) + '"' + (c.id === t.courseId ? ' selected' : '') + '>' +
+        esc(c.name) + '</option>';
+    });
+    openSheet('<h3>认出来了，确认一下</h3><div class="sub">哪一项不对就改哪一项，改完再入库</div>' +
+      '<label>课程</label><select id="cfCourse">' + opts + '</select>' +
+      '<label>要做的事</label><input id="cfTitle" value="' + esc(t.title) + '">' +
+      '<div class="row2"><div><label>截止日期</label>' +
+      '<input type="date" id="cfDue" value="' + esc(t.dueOn) + '"></div>' +
+      '<div><label>预计分钟</label><input type="number" id="cfMin" min="5" max="240" value="' + t.estMin + '"></div></div>' +
+      (r.warnings && r.warnings.length ? '<div class="warn">' + r.warnings.map(esc).join('<br>') + '</div>' : '') +
+      (r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
+      '<div class="acts"><button data-sheet="close">不要</button>' +
+      '<button class="primary" data-sheet="save">加入作业表</button></div>');
+  }
+
+  function saveFromSheet() {
+    var title = (($('#cfTitle') || {}).value || '').trim();
+    var dueOn = ($('#cfDue') || {}).value || '';
+    var courseId = ($('#cfCourse') || {}).value || '';
+    var estMin = Number(($('#cfMin') || {}).value) || 0;
+    if (!title) return toast('「要做的事」不能空');
+    if (!dueOn) return toast('选个截止日期');
+    state.homework.push({
+      id: 'hw' + Date.now(),
+      courseId: courseId,
+      title: title.slice(0, 60),
+      dueOn: dueOn,
+      estMin: Math.max(5, Math.min(240, estMin || 30)),
+      from: 'shot'
+    });
+    save();
+    closeSheet();
+    toast('已加入作业表，到期那天会进今日清单');
+    render();
+  }
+
+  function testConnection() {
+    if (!hasKey()) return toast('先填 Key 再测');
+    toast('测试中…');
+    var px = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    postVision([{ role: 'user', content: [
+      { type: 'image_url', image_url: { url: px } },
+      { type: 'text', text: '这是一张 1x1 的图。只回两个字：收到' }
+    ]}]).then(function () {
+      toast('连通了：' + modelName() + ' 可用');
+    }).catch(function (err) {
+      toast('不行：' + err.message);
+    });
+  }
+
   /* ---------------- 交互 ---------------- */
 
   function setBaseline() {
@@ -502,7 +714,9 @@
   function onViewClick(e) {
     var act = e.target.closest ? e.target.closest('[data-act]') : null;
     if (act) {
-      if (act.getAttribute('data-act') === 'baseline') setBaseline();
+      var a = act.getAttribute('data-act');
+      if (a === 'baseline') setBaseline();
+      else if (a === 'shoot') startShot();
       return;
     }
     var t = e.target.closest ? e.target.closest('.todo, .li') : null;
@@ -563,6 +777,27 @@
     viewDate = R.toISO(stateNow());
     render();
     toast('回到今天');
+  });
+
+  /* 拍照识别相关的挂载 */
+  $('#shotInput').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    onShot(f);
+  });
+  $('#backdrop').addEventListener('click', closeSheet);
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-sheet]') : null;
+    if (!el) return;
+    var a = el.getAttribute('data-sheet');
+    if (a === 'close') closeSheet();
+    else if (a === 'save') saveFromSheet();
+    else if (a === 'retry') startShot();
+    else if (a === 'goto-key' || a === 'manual') {
+      closeSheet();
+      tab = 'settings';
+      render();
+    }
   });
 
   render();
