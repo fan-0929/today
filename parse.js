@@ -174,6 +174,65 @@
     return null;
   }
 
+  /* ---------- 具体几点 ---------- */
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  /**
+   * 「今晚 8 点」「23:59 前」「下午 5 点半」→ 'HH:MM'；认不出返回 ''。
+   */
+  function parseDueTime(text) {
+    var s = String(text == null ? '' : text).replace(/[\s　]/g, '');
+    if (!s) return '';
+
+    var m = s.match(/(\d{1,2})[:：](\d{2})/);
+    if (m) {
+      var h0 = Number(m[1]), mi0 = Number(m[2]);
+      if (h0 >= 0 && h0 <= 23 && mi0 >= 0 && mi0 <= 59) return pad2(h0) + ':' + pad2(mi0);
+    }
+
+    m = s.match(/(凌晨|早上|上午|中午|下午|傍晚|晚上|今晚|明晚)?(\d{1,2})点(半|(\d{1,2})分?)?/);
+    if (!m) return '';
+    var hh = Number(m[2]);
+    var mm = m[3] === '半' ? 30 : (m[4] ? Number(m[4]) : 0);
+    var pre = m[1] || '';
+    if (/下午|傍晚|晚上|今晚|明晚/.test(pre) && hh < 12) hh += 12;
+    if (/凌晨/.test(pre) && hh === 12) hh = 0;
+    if (hh < 0 || hh > 23 || mm > 59) return '';
+    return pad2(hh) + ':' + pad2(mm);
+  }
+
+  /**
+   * 「3 小时后」「剩下 5 小时」「40 分钟内」「半小时内交」→ {dueOn, dueTime, minutesLeft}
+   * 认不出返回 null。
+   */
+  function parseRelative(text, ctx) {
+    var s = String(text == null ? '' : text).replace(/[\s　]/g, '');
+    if (!s) return null;
+    var now = (ctx && ctx.nowAt) ? new Date(ctx.nowAt) : new Date();
+    if (isNaN(now.getTime())) now = new Date();
+
+    var mins = null;
+    var m = s.match(/(半|[零一二两三四五六七八九十百\d.]+)个?小时(之内|以内|内|之后|后)?/);
+    if (m) {
+      mins = m[1] === '半' ? 30
+        : Math.round((/^\d+(\.\d+)?$/.test(m[1]) ? Number(m[1]) : cnToInt(m[1])) * 60);
+    }
+    if (!mins) {
+      var m2 = s.match(/([零一二两三四五六七八九十百\d]+)分钟(之内|以内|内|之后|后)?/);
+      if (m2) mins = cnToInt(m2[1]);
+    }
+    if (!mins || mins <= 0) return null;
+    if (mins > 60 * 24 * 30) return null; // 一个月以上就不算「几小时后」了
+
+    var dt = new Date(now.getTime() + mins * 60000);
+    return {
+      dueOn: toISO(dt),
+      dueTime: pad2(dt.getHours()) + ':' + pad2(dt.getMinutes()),
+      minutesLeft: mins
+    };
+  }
+
   function safeISO(y, m, d) {
     if (!(y > 2000 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
     var iso = y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
@@ -350,6 +409,11 @@
     }
     if (!dueOn) dueOn = addDays(today, 1);
 
+    /* 具体几点：模型给了就用它的，没给就从原文里找 */
+    var dueTime = parseDueTime(String(obj.dueTime || '')) || parseDueTime(obj.dueOn || '') ||
+      parseDueTime(obj.raw || '');
+    if (diffDays(today, dueOn) < 0) dueTime = '';
+
     var estMin = Number(obj.estMin);
     if (!isFinite(estMin) || estMin <= 0) estMin = estMinGuess(title);
     estMin = Math.max(5, Math.min(240, Math.round(estMin)));
@@ -359,6 +423,7 @@
       courseName: course ? course.name : '',
       title: title,
       dueOn: dueOn,
+      dueTime: dueTime,
       estMin: estMin
     };
   }
@@ -451,6 +516,11 @@
     s = s.replace(/(这|本|下{1,2})\s*(个)?\s*(周|星期|礼拜)(内|之前|前)?/g, ' ');
     s = s.replace(/(今天|今晚|今日|大后天|后天|明天|明日)/g, ' ');
     s = s.replace(/[一二三四五六七八九十\d]{1,3}\s*(日|天)内/g, ' ');
+    // 几点、几小时后、剩多久
+    s = s.replace(/(凌晨|早上|上午|中午|下午|傍晚|晚上|今晚|明晚)?\s*\d{1,2}\s*[点:：]\s*(\d{1,2}\s*分?|半)?/g, ' ');
+    s = s.replace(/剩(下|余)?\s*[零一二两三四五六七八九十百\d.]+\s*(个)?\s*(小时|分钟)/g, ' ');
+    s = s.replace(/[零一二两三四五六七八九十百\d.]+\s*个?\s*小时(之内|以内|内|之后|后)?/g, ' ');
+    s = s.replace(/[零一二两三四五六七八九十百\d]+\s*分钟(之内|以内|内|之后|后)?/g, ' ');
 
     // 口头语与动词
     s = s.replace(/^(要|得|需|需要|记得|别忘了|帮我|我|作业|任务|请大家)[\s:：]*/g, '');
@@ -533,7 +603,9 @@
     flat.forEach(function (seg, idx) {
       if (tasks.length >= MAX_TASKS) return;
       var course = matchCourse(seg, courses);
-      var dueOn = parseDueDate(seg, today);
+      var rel = parseRelative(seg, ctx);
+      var dueOn = rel ? rel.dueOn : parseDueDate(seg, today);
+      var dueTime = rel ? rel.dueTime : parseDueTime(seg);
       var title = titleFromText(seg, course) || String(seg).slice(0, MAX_TITLE);
       var pre = flat.length > 1 ? '第 ' + (idx + 1) + ' 条：' : '';
 
@@ -544,6 +616,7 @@
       } else if (diffDays(today, dueOn) < 0) {
         warnings.push(pre + '写的日期已经过去了，改成明天');
         dueOn = addDays(today, 1);
+        dueTime = '';
       }
 
       tasks.push({
@@ -551,6 +624,7 @@
         courseName: course ? course.name : '',
         title: title,
         dueOn: dueOn,
+        dueTime: dueTime || '',
         estMin: estMinGuess(title)
       });
     });
@@ -611,6 +685,8 @@
     clean: clean,
     matchCourse: matchCourse,
     parseDueDate: parseDueDate,
+    parseDueTime: parseDueTime,
+    parseRelative: parseRelative,
     estMinGuess: estMinGuess,
     buildPrompt: buildPrompt,
     buildMessages: buildMessages,
