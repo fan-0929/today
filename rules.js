@@ -401,6 +401,40 @@
     return out;
   }
 
+  /**
+   * 作业台账：没做完的作业按截止时间从早到晚排，给今日页「作业」区用。
+   * 返回 [{ hw, courseId, courseName, color, dueOn, daysLeft, state }]
+   *   daysLeft > 0 逾期 / = 0 今天到期 / < 0 还没到
+   */
+  function homeworkList(state, today) {
+    var courses = state.courses || [];
+    var byId = {};
+    courses.forEach(function (c) { byId[c.id] = c; });
+    var list = (state.homework || []).filter(function (hw) {
+      return hw && hw.dueOn && !hw.done && !hw.doneOn;
+    });
+    list.sort(function (a, b) {
+      if (a.dueOn !== b.dueOn) return a.dueOn < b.dueOn ? -1 : 1;
+      var an = (byId[a.courseId] || {}).name || '';
+      var bn = (byId[b.courseId] || {}).name || '';
+      if (an !== bn) return an < bn ? -1 : 1;
+      return String(a.id) < String(b.id) ? -1 : 1;
+    });
+    return list.map(function (hw) {
+      var c = byId[hw.courseId] || null;
+      var days = diffDays(hw.dueOn, today);   // >0 逾期，0 今天到期，<0 还没到
+      return {
+        hw: hw,
+        courseId: hw.courseId,
+        courseName: c ? c.name : (hw.courseName || '其他'),
+        color: (c && c.color) || '#888',
+        dueOn: hw.dueOn,
+        daysLeft: days,
+        state: days > 0 ? 'overdue' : days === 0 ? 'today' : 'later'
+      };
+    });
+  }
+
   return {
     KIND: KIND,
     PRIO: PRIO,
@@ -419,6 +453,7 @@
     totalSessions: totalSessions,
     chapterAt: chapterAt,
     buildTasks: buildTasks,
+    homeworkList: homeworkList,
     nextSessionAfter: nextSessionAfter,
     courseStats: courseStats,
     upcomingSummary: upcomingSummary
