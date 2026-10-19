@@ -454,6 +454,29 @@ test('dailyList：任务标题里不带章节名和分钟数', function () {
   });
 });
 
+/* ---------------- 作业台账：具体几点、还剩几小时 ---------------- */
+
+test('homeworkList 同一天按时间排，没写时间的排最后', function () {
+  var s = fixture();
+  s.homework = [
+    { id: 'x', courseId: 'math', title: '晚', dueOn: '2026-10-19', dueTime: '20:00' },
+    { id: 'y', courseId: 'math', title: '早', dueOn: '2026-10-19', dueTime: '09:00' },
+    { id: 'z', courseId: 'math', title: '没写时间', dueOn: '2026-10-19' }
+  ];
+  var ids = R.homeworkList(s, '2026-10-19', '2026-10-19T14:00:00').map(function (x) { return x.hw.id; });
+  assert.deepStrictEqual(ids, ['y', 'x', 'z']);
+});
+
+test('homeworkList 今天到期且写了时间 → 算出还剩几小时', function () {
+  var s = fixture();
+  s.homework = [{ id: 'a', courseId: 'math', title: '作文', dueOn: '2026-10-19', dueTime: '20:30' }];
+  var x = R.homeworkList(s, '2026-10-19', '2026-10-19T18:00:00')[0];
+  assert.strictEqual(x.dueTime, '20:30');
+  assert.strictEqual(x.hoursLeft, 2.5);
+  var late = R.homeworkList(s, '2026-10-19', '2026-10-19T22:00:00')[0];
+  assert.ok(late.hoursLeft < 0, '过了点应该算负数');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
