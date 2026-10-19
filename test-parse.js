@@ -459,6 +459,33 @@ test('parseText 认出「今晚 8 点前」', function () {
   assert.strictEqual(r.tasks[0].dueTime, '20:00');
 });
 
+/* ---------------- 文字也走一遍模型 ---------------- */
+
+test('buildTextMessages：一条纯文本消息，带课程表与文字正文', function () {
+  var msgs = P.buildTextMessages('英语作文 3小时后交', ['高等数学A(1)', '大学英语C(1)'], '2026-10-19');
+  assert.strictEqual(msgs.length, 1);
+  assert.strictEqual(msgs[0].role, 'user');
+  assert.strictEqual(typeof msgs[0].content, 'string', '纯文本请求的 content 用字符串');
+  var c = msgs[0].content;
+  assert.ok(c.indexOf('英语作文 3小时后交') >= 0, '要带上原文');
+  assert.ok(c.indexOf('大学英语C(1)') >= 0, '要带上课程表');
+  assert.ok(c.indexOf('2026-10-19') >= 0, '要带上今天');
+  assert.ok(c.indexOf('dueTime') >= 0, '要要求模型给具体几点');
+  assert.strictEqual(c.indexOf('image_url'), -1, '不该有图片');
+});
+
+test('buildTextMessages：同样的 JSON 契约能被 normalizeResult 吃下', function () {
+  var reply = JSON.stringify({
+    tasks: [{ course: '大学英语C(1)', title: '英语作文', dueOn: '2026-10-19', dueTime: '22:40', estMin: 30, raw: '英语作文 3小时后交' }],
+    raw: '英语作文 3小时后交'
+  });
+  var r = P.normalizeResult(reply, { today: '2026-10-19', courses: COURSES });
+  assert.strictEqual(r.tasks.length, 1);
+  assert.strictEqual(r.tasks[0].courseName, '大学英语C(1)');
+  assert.strictEqual(r.tasks[0].dueOn, '2026-10-19');
+  assert.strictEqual(r.tasks[0].dueTime, '22:40');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
