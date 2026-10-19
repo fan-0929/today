@@ -365,9 +365,37 @@
     return null;
   }
 
+  /** 模型回答被截断时，把还完整的那些任务对象抢回来（比整份丢掉强） */
+  function salvageTasks(text) {
+    var s = String(text == null ? '' : text);
+    var objs = [];
+    var re = /\{[^{}]*\}/g;
+    var m;
+    while ((m = re.exec(s))) {
+      try {
+        var o = JSON.parse(m[0]);
+        if (o && (o.title || o.name || o.content)) objs.push(o);
+      } catch (e) { /* 半截对象，跳过 */ }
+    }
+    var topRaw = '';
+    var rm = s.match(/"raw"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (rm) { try { topRaw = JSON.parse('"' + rm[1] + '"'); } catch (e) { topRaw = rm[1]; } }
+    if (!objs.length && !topRaw) return null;
+    return { tasks: objs, raw: topRaw, __salvaged: true };
+  }
+
+  /** 「未交」「剩余 414 小时 26 分钟」这类行不是任务，是上一条任务的线索 */
+  function isMetaLine(line) {
+    if (/^(?:未交|未提交|未完成|已完成|已提交|已交|进行中|待完成|剩余)/.test(line)) return true;
+    if (/(剩余|还剩|倒计时)\s*[:：]?/.test(line) && line.length <= 30) return true;
+    return false;
+  }
+
   /**
    * 兜底：模型没给出干净 JSON（或者干脆说「不知道要干什么」）时，
    * 把图里认到的原文切成候选行，让用户改个标题就能入库——而不是弹一个死胡同。
+   * 注意：截图里「标题一行、未交/剩余时间另起一行」很常见，
+   * 所以要把它当成上一条的日期线索，而不是又一条任务。
    */
   function fallbackTasks(text, ctx) {
     ctx = ctx || {};
@@ -386,23 +414,56 @@
           .replace(/^\s*(?:[-*·•]|\(?\d+[).、]|[①-⑩]|[一二三四五六七八九十]+[、.])[\s、.]*/, '')
           .replace(/\s+/g, ' ')
           .trim();
-        if (line.length < 3 || line.length > 60) continue;
-        if (/^(?:isTask|tasks?|title|course|dueOn|estMin|raw)\b/.test(line)) continue;
+        if (line.length < 2) continue;
+
+        /* 「未交」「剩余 414 小时 26 分钟」这类行是上一条的日期线索，不是新任务 */
+        if (isMetaLine(line)) {
+          var last = out[out.length - 1];
+          if (last) {
+            var relMeta = parseRelative(line, ctx) || (parseDueDate(line, today) ? { dueOn: parseDueDate(line, today) } : null);
+            if (relMeta && relMeta.dueOn && (!last.dueOn || last.dueOnAuto)) {
+              last.dueOn = relMeta.dueOn;
+              last.dueTime = relMeta.dueTime || '';
+              last.dueOnAuto = false;
+            }
+            last.meta = (last.meta ? last.meta + ' ' : '') + line;
+          }
+          continue;
+        }
+
+        if (line.length > 60) continue;
+        if (/^(?:isTask|tasks?|title|course|dueOn|dueTime|estMin|raw|remain|countdown)\b/.test(line)) continue;
         if (/^[\s:,;.!?~—\-]/.test(line)) continue;                       /* JSON 残渣，例如 ":true" */
         if (/^(?:true|false|null|nil|ok|okay|yes|no|none|\d+)$/i.test(line)) continue;
         var key = line.replace(/\s/g, '');
         if (seen[key]) continue;
         seen[key] = 1;
         var course = matchCourse(line, courses);
+        var rel = parseRelative(line, ctx);
+        var dueAbs = parseDueDate(line, today);
         out.push({
           courseId: course ? course.id : '',
           courseName: course ? course.name : '',
           title: line.slice(0, MAX_TITLE),
-          dueOn: parseDueDate(line, today) || '',
+          dueOn: (dueAbs || (rel && rel.dueOn)) || '',
+          dueTime: (dueAbs ? '' : (rel && rel.dueTime)) || '',
+          dueOnAuto: !(dueAbs || rel),
           estMin: estMinGuess(line)
         });
       }
     }
+
+    /* 仍然没有日期的，回头在整段原文里找它那一行下面的「剩余…」 */
+    var all = String(text || '');
+    out.forEach(function (t) {
+      if (t.dueOn || !t.title) return;
+      var idx = all.indexOf(t.title.slice(0, 8));
+      if (idx < 0) return;
+      var windowText = all.slice(idx, idx + 120);
+      var rel = parseRelative(windowText, ctx) || (parseDueDate(windowText, today) ? { dueOn: parseDueDate(windowText, today) } : null);
+      if (rel && rel.dueOn) { t.dueOn = rel.dueOn; t.dueTime = rel.dueTime || ''; t.dueOnAuto = false; }
+    });
+
     return out;
   }
 
@@ -455,13 +516,14 @@
       collect.push(pre + '截止日期没看懂（原文：' + String(obj.dueOn).slice(0, 20) + '），先按明天算');
     }
     if (!dueOn) dueOn = parseDueDate(obj.raw || '', today);
-    if (!obj.dueOn && !dueOn) collect.push(pre + '图里没写截止日期，默认明天');
+    /* 「默认明天」的提示推迟到救援之后再说：可能能从原文的剩余时间里算出来 */
     if (dueOn && diffDays(today, dueOn) < 0) {
       collect.push(pre + '识别出的日期已经过去，改成明天');
       dueOn = addDays(today, 1);
       rel = null;
     }
-    if (!dueOn) dueOn = addDays(today, 1);
+    var dueGuessed = false;
+    if (!dueOn) { dueOn = addDays(today, 1); dueGuessed = true; }
 
     /* 具体几点：模型给了就用它的，没给就从原文里找 */
     var dueTime = parseDueTime(String(obj.dueTime || '')) || (rel && rel.dueTime) ||
@@ -478,6 +540,7 @@
       title: title,
       dueOn: dueOn,
       dueTime: dueTime,
+      dueGuessed: dueGuessed,
       estMin: estMin
     };
   }
@@ -497,6 +560,16 @@
     var warnings = [];
     var tasks = [];
 
+    /* 回答被 max_tokens 截断时，整份 JSON 解析不出来，但前半段往往是完整的：
+       把还完整的任务对象抢回来，比退化成「按行猜」强得多 */
+    if (!obj) {
+      var salv = salvageTasks(modelText);
+      if (salv && (salv.tasks.length || salv.raw)) {
+        obj = salv;
+        warnings.push('模型的回答被截断了（图里作业太多），我抢回了还能用的部分——漏掉的手动补一条');
+      }
+    }
+
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
       raw = String(obj.raw || obj.text || '').slice(0, 400);
     }
@@ -506,6 +579,34 @@
       var t = normalizeOne(arr[i], { today: today, courses: courses, nowAt: ctx.nowAt }, warnings, arr.length > 1 ? i + 1 : 0);
       if (t) tasks.push(t);
     }
+
+    /* 后置救援：模型常常把整屏原文放在顶层 raw、单条任务里不给日期。
+       谁没有日期，就去 raw 里找它那一行（及其后两行）自己算。 */
+    if (raw && tasks.length) {
+      tasks.forEach(function (tk) {
+        if (tk.dueOn && !tk.dueGuessed) return;   /* 已经算出确切日期就不动 */
+        var probe = String(tk.title || '').slice(0, 6);
+        if (probe.length < 2) return;
+        var idx = raw.indexOf(probe);
+        if (idx < 0) return;
+        var chunk = raw.slice(idx, idx + 120);
+        var rel = parseRelative(chunk, ctx) || (parseDueDate(chunk, today) ? { dueOn: parseDueDate(chunk, today) } : null);
+        if (rel && rel.dueOn) {
+          tk.dueOn = rel.dueOn;
+          tk.dueTime = tk.dueTime || rel.dueTime || '';
+          tk.dueGuessed = false;
+          warnings.push('「' + tk.title.slice(0, 12) + '」的截止时间是从图里的剩余时间算的，核对一下');
+        }
+      });
+    }
+
+    /* 救援之后仍然没有日期的，才提示「默认明天」 */
+    tasks.forEach(function (tk, i) {
+      if (tk.dueGuessed) {
+        warnings.push((tasks.length > 1 ? '第 ' + (i + 1) + ' 条：' : '') + '图里没写截止日期，默认明天');
+      }
+      delete tk.dueGuessed;
+    });
 
     if (tasks.length) {
       return {
