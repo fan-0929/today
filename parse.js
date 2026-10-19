@@ -210,14 +210,23 @@
   }
 
   /**
-   * 「3 小时后」「剩下 5 小时」「40 分钟内」「半小时内交」→ {dueOn, dueTime, minutesLeft}
-   * 认不出返回 null。
+   * 「3 小时后」「剩下 5 小时」「40 分钟内」「剩余414小时26分钟」「3 天 5 小时」
+   * → {dueOn, dueTime, minutesLeft}；认不出返回 null。
    */
   function parseRelative(text, ctx) {
     var s = String(text == null ? '' : text).replace(/[\s　]/g, '');
     if (!s) return null;
     var now = (ctx && ctx.nowAt) ? new Date(ctx.nowAt) : new Date();
     if (isNaN(now.getTime())) now = new Date();
+
+    // 「414小时26分钟」这种小时+分钟连写的，两段都要算上
+    var mCombo = s.match(/([零一二两三四五六七八九十百\d.]{1,5})个?小时([零一二两三四五六七八九十百\d.]{1,3})分(钟)?/);
+    if (mCombo) {
+      var hh = /^\d+(\.\d+)?$/.test(mCombo[1]) ? Number(mCombo[1]) : cnToInt(mCombo[1]);
+      var mm = /^\d+$/.test(mCombo[2]) ? Number(mCombo[2]) : cnToInt(mCombo[2]);
+      var total = Math.round((hh || 0) * 60 + (mm || 0));
+      if (total > 0) return relFromMinutes(now, total);
+    }
 
     var mins = null;
     var m = s.match(/(半|[零一二两三四五六七八九十百\d.]+)个?小时(之内|以内|内|之后|后)?/);
@@ -229,9 +238,17 @@
       var m2 = s.match(/([零一二两三四五六七八九十百\d]+)分钟(之内|以内|内|之后|后)?/);
       if (m2) mins = cnToInt(m2[1]);
     }
+    if (!mins) {
+      // 「3 天后」这类按整天算的也归到这里，方便统一从「现在」往后推
+      var m3 = s.match(/([零一二两三四五六七八九十百\d]{1,3})\s*天(之内|以内|内|之后|后)/);
+      if (m3) mins = cnToInt(m3[1]) * 24 * 60;
+    }
     if (!mins || mins <= 0) return null;
     if (mins > 60 * 24 * 30) return null; // 一个月以上就不算「几小时后」了
+    return relFromMinutes(now, mins);
+  }
 
+  function relFromMinutes(now, mins) {
     var dt = new Date(now.getTime() + mins * 60000);
     return {
       dueOn: toISO(dt),
@@ -265,7 +282,7 @@
     return [
       '你是学生的作业通知解析器。看图里的文字，把「要学生做的事」一条条列出来。',
       '只输出一个 JSON 对象，不要解释、不要 Markdown 代码块。格式：',
-      '{"tasks":[{"course":"课程名","title":"要做什么","dueOn":"YYYY-MM-DD","estMin":数字,"raw":"这条对应的原文"}],',
+      '{"tasks":[{"course":"课程名","title":"要做什么","dueOn":"YYYY-MM-DD","dueTime":"HH:MM 或空","remain":"剩余时间原话或空","estMin":数字,"raw":"这条对应的原文"}],',
       ' "raw":"整张图里与作业有关的关键原文，不超过 300 字"}',
       '规则：',
       '1. 图里可能同时有好几条作业（例如截图里连着的几行通知、群里连着发的几条）——**每条单独一个对象，全都列出来**，不要合并、不要只挑第一条、不要漏。',
@@ -274,7 +291,8 @@
       '4. course 必须从课程列表里原样挑一个；判断不出就填空字符串，**不要因为课程不确定就把这条丢掉**。',
       '5. dueOn 图里没有就填空字符串，别瞎猜；看到「明天 / 下周三 / 本周五前 / 3 日内」要换算成具体日期。',
       '6. estMin 是整数分钟；估不出来填 30。',
-      '7. 如果整张图里没有任何「要你做的事」（例如只是课本正文、课件标题、闲聊），返回 {"tasks":[]}。',
+      '7. **截图里写「剩余 414 小时 26 分钟」「还剩 78 小时」这种剩余时间的，把那段话一字不改抄进 remain 字段，dueOn 留空——不要自己换算、不要跳过这条。**',
+      '8. 如果整张图里没有任何「要你做的事」（例如只是课本正文、课件标题、闲聊），返回 {"tasks":[]}。',
       '课程列表：' + (courseNames || []).join(' / '),
       '今天是 ' + today + '。'
     ].join('\n');
@@ -421,10 +439,12 @@
     }
     if (!course) collect.push(pre + '没判断出是哪门课，请选一下');
 
-    /* 日期优先级：模型给的绝对日期 > 模型给的「70 小时后」> 原文里的相对时间 > 原文里的日期 > 明天 */
+    /* 日期优先级：模型给的绝对日期 > 模型给的剩余时间/「70 小时后」> 原文里的相对时间 > 原文里的日期 > 明天 */
+    var remainText = String(obj.remain || '') + ' ' + String(obj.countdown || '');
+    var relRemain = parseRelative(remainText, ctx);
     var relModel = parseRelative(String(obj.dueOn || ''), ctx);
     var relRaw = parseRelative(String(obj.raw || ''), ctx);
-    var rel = relModel || relRaw;
+    var rel = relRemain || relModel || relRaw;
     var dueOn = parseDueDate(obj.dueOn || '', today);
     if (!dueOn && rel) dueOn = rel.dueOn;
     if (!dueOn && obj.dueOn) {
@@ -553,7 +573,9 @@
     s = s.replace(/(凌晨|早上|上午|中午|下午|傍晚|晚上|今晚|明晚)?\s*\d{1,2}\s*[点:：]\s*(\d{1,2}\s*分?|半)?/g, ' ');
     s = s.replace(/剩(下|余)?\s*[零一二两三四五六七八九十百\d.]+\s*(个)?\s*(小时|分钟)/g, ' ');
     s = s.replace(/[零一二两三四五六七八九十百\d.]+\s*个?\s*小时(之内|以内|内|之后|后)?/g, ' ');
-    s = s.replace(/[零一二两三四五六七八九十百\d]+\s*分钟(之内|以内|内|之后|后)?/g, ' ');
+    s = s.replace(/[零一二两三四五六七八九十百\d.]+\s*分钟(之内|以内|内|之后|后)?/g, ' ');
+    s = s.replace(/(剩余|还剩|还剩下|剩余时间|倒计时)[\s:：]*/g, ' ');
+    s = s.replace(/(未交|已完成|已交|未完成)[\s:：]*/g, ' ');
 
     // 口头语与动词
     s = s.replace(/^(要|得|需|需要|记得|别忘了|帮我|我|作业|任务|请大家)[\s:：]*/g, '');
