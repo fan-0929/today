@@ -602,6 +602,48 @@ test('「明天交C语言作业」标题不再被切成「言作业」', functio
   assert.strictEqual(t.title, 'C语言作业');
 });
 
+/* ---------------- 合并：本地规则 vs 模型 ---------------- */
+
+var MCTX = { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T21:56:00' };
+
+function api1(obj, raw) {
+  return P.normalizeResult(JSON.stringify({ tasks: [obj], raw: raw }), MCTX);
+}
+
+test('合并：模型把 72 小时算错成 11-21，仍按本地的 10-22 填并给出提示', function () {
+  var local = P.parseText('72小时后交化学', MCTX);
+  var api = api1({ course: '大学化学', title: '化学作业', dueOn: '2026-11-21', estMin: 40 }, '72小时后交化学');
+  var m = P.mergeResults(local, api);
+  assert.strictEqual(m.tasks[0].dueOn, '2026-10-22');
+  assert.strictEqual(m.tasks[0].dueTime, '21:56');
+  assert.strictEqual(m.tasks[0].title, '化学');         // 预览里看到的就是它
+  assert.strictEqual(m.tasks[0].courseName, '大学化学');
+  assert.ok(m.warnings.join('').indexOf('11月21日') >= 0, '要说明模型算的是哪天');
+});
+
+test('合并：本地认不出科目时，用模型补上的科目', function () {
+  var local = P.parseText('随笔一篇 明天交', MCTX);
+  var api = api1({ course: '大学英语C(1)', title: '随笔一篇', dueOn: '2026-10-20' }, '随笔一篇 明天交');
+  var m = P.mergeResults(local, api);
+  assert.strictEqual(m.tasks[0].courseName, '大学英语C(1)');
+  assert.strictEqual(m.tasks[0].dueOn, '2026-10-20');
+});
+
+test('合并：本地完全认不出时，整份用模型的', function () {
+  var local = { ok: false, draft: false, reason: 'no-title', tasks: [], warnings: [], raw: '' };
+  var api = api1({ course: '高等数学A(1)', title: '习题 9.9', dueOn: '2026-10-25' }, 'x');
+  var m = P.mergeResults(local, api);
+  assert.strictEqual(m.tasks[0].dueOn, '2026-10-25');
+  assert.strictEqual(m.tasks.length, 1);
+});
+
+test('合并：条数不一致时退回本地并说明', function () {
+  var local = P.parseText('数学作业明天交\n英语作文周五交', MCTX);
+  var api = api1({ course: '高等数学A(1)', title: '数学作业', dueOn: '2026-10-20' }, 'x');
+  var m = P.mergeResults(local, api);
+  assert.strictEqual(m.tasks.length, 2);
+  assert.ok(m.warnings.join('').indexOf('模型分成 1 条') >= 0);
+});
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
