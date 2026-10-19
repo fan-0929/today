@@ -477,6 +477,41 @@ test('homeworkList 今天到期且写了时间 → 算出还剩几小时', funct
   assert.ok(late.hoursLeft < 0, '过了点应该算负数');
 });
 
+/* ---------------- 没做完的：留 3 天 ---------------- */
+
+test('dailyList：昨天没勾的进「没做完」，还剩 2 天', function () {
+  var s = Seed.defaultState();
+  var l = R.dailyList(s, '2026-10-19');
+  assert.ok(l.carry.length > 0, '应该带上昨天和前天的未完成项');
+  l.carry.forEach(function (t) {
+    assert.ok(t.daysLeft >= 1 && t.daysLeft <= 2, '剩余天数应在 1~2：' + t.daysLeft);
+    assert.ok(t.carryFrom === '2026-10-18' || t.carryFrom === '2026-10-17', t.carryFrom);
+  });
+  var oldest = l.carry[0];
+  assert.strictEqual(oldest.carryFrom, '2026-10-17', '越老越靠前');
+  assert.strictEqual(oldest.daysLeft, 1);
+});
+
+test('dailyList：勾掉之后就不再出现在「没做完」里', function () {
+  var s = Seed.defaultState();
+  var before = R.dailyList(s, '2026-10-19').carry.length;
+  var first = R.dailyList(s, '2026-10-19').carry[0];
+  s.done[first.id] = 1;
+  var after = R.dailyList(s, '2026-10-19').carry.length;
+  assert.strictEqual(after, before - 1);
+});
+
+test('dailyList：第 4 天就自己消失，不会越积越多', function () {
+  var s = Seed.defaultState();
+  var l = R.dailyList(s, '2026-10-19');
+  var ids = l.carry.map(function (t) { return t.id; });
+  ids.forEach(function (id) {
+    assert.strictEqual(/^2026-10-1[78]#/.test(id), true, '只该有昨天和前天的：' + id);
+  });
+  /* 10-16 的任务不在任何日期里 */
+  assert.strictEqual(ids.some(function (id) { return id.indexOf('2026-10-16#') === 0; }), false);
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
