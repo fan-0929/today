@@ -123,6 +123,40 @@
 
   /* ---------------- 今日 ---------------- */
 
+  function confirmBar(id, pend) {
+    if (!pend) return '';
+    return '<div class="confirm">' +
+      '<div class="q">点错了？现在还能后悔。</div>' +
+      '<button class="b primary" data-act="confirmDone" data-id="' + esc(id) + '">确定做了</button>' +
+      '<button class="b" data-act="cancelDone">取消</button>' +
+      '</div>';
+  }
+
+  /* 作业台账的一行：截止时间从早到晚排，逾期/今天到期标红 */
+  function hwHTML(x, alsoToday) {
+    var id = 'hw#' + x.hw.id;
+    var pend = pendingDone === id;
+    var badge, cls = '';
+    if (x.state === 'overdue') { badge = '逾期 ' + x.daysLeft + ' 天'; cls = 'hot'; }
+    else if (x.state === 'today') { badge = '今天到期'; cls = 'hot'; }
+    else if (x.daysLeft === -1) { badge = '明天到期'; cls = 'warm'; }
+    else { badge = '还有 ' + (-x.daysLeft) + ' 天'; }
+    return '' +
+      '<div class="todo hw' + (pend ? ' pend' : '') + '" data-id="' + esc(id) + '">' +
+        '<div class="body">' +
+          '<div class="tt"><i class="cdot" style="background:' + esc(x.color) + '"></i>' +
+            esc(x.hw.title) + '</div>' +
+          '<div class="meta">' +
+            '<span class="tag ' + cls + '">' + esc(badge) + '</span>' +
+            '<span>' + esc(R.fmtCN(x.dueOn)) + '</span>' +
+            '<span>' + esc(x.courseName) + '</span>' +
+            (alsoToday ? '<span class="tag">也在今日清单</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<button class="box" aria-label="完成">✓</button>' +
+      '</div>' + confirmBar(id, pend);
+  }
+
   function taskHTML(t, rank) {
     var done = !!state.done[t.id];
     var pend = pendingDone === t.id;
@@ -140,12 +174,7 @@
           '<div class="meta">' + meta.join('') + '</div>' +
         '</div>' +
         '<button class="box" aria-label="完成">✓</button>' +
-      '</div>' +
-      (pend ? '<div class="confirm">' +
-        '<div class="q">点错了？现在还能后悔。</div>' +
-        '<button class="b primary" data-act="confirmDone" data-id="' + esc(t.id) + '">确定做了</button>' +
-        '<button class="b" data-act="cancelDone">取消</button>' +
-        '</div>' : '');
+      '</div>' + confirmBar(t.id, pend);
   }
 
   function renderToday() {
@@ -181,6 +210,20 @@
       html += '<div class="card banner"><div class="bd"><b>第一次打开？</b>' +
         '之前没勾过的课后复习现在都被算成积压了。不想回头补，就从今天开始记。</div>' +
         '<div class="btns" style="padding:0 15px 14px"><button class="b" data-act="baseline">从今天开始记</button></div></div>';
+    }
+
+    /* 作业台账：按截止时间从早到晚，就在「今天先做这几件」前面 */
+    var hwList = R.homeworkList(state, d);
+    if (hwList.length) {
+      var inToday = {};
+      built.all.forEach(function (t) {
+        var i = t.id.indexOf('#hw-');
+        if (i >= 0) inToday[t.id.slice(i + 4)] = 1;
+      });
+      html += '<div class="h">作业 <span class="n">' + hwList.length + ' 条 · 按截止时间排</span></div>' +
+        '<div class="card hwcard">';
+      hwList.forEach(function (x) { html += hwHTML(x, !!inToday[x.hw.id]); });
+      html += '</div>';
     }
 
     /* 今日必做：先把「积压复习」摘出去，别让它把今天真正该做的事淹掉 */
@@ -785,12 +828,34 @@
 
   function commitDone(id) {
     pendingDone = null;
+
+    /* 作业台账那一行：hw#<id> */
+    if (id.indexOf('hw#') === 0) {
+      markHomeworkDone(id.slice(3));
+      toast('作业已划掉');
+      render();
+      return;
+    }
+
+    /* 今日清单里的作业任务：顺手把台账那条也划掉，免得两处不一致 */
+    var m = /#hw-(.+)$/.exec(id);
+    if (m) markHomeworkDone(m[1]);
+
     if (state.done[id]) delete state.done[id];
     else state.done[id] = Date.now();
     save();
     var left = R.buildTasks(state, viewDate).all.length;
     toast(state.done[id] ? '记下了，还剩 ' + left + ' 件' : '已取消勾选');
     render();
+  }
+
+  function markHomeworkDone(hwid) {
+    var hit = false;
+    (state.homework || []).forEach(function (h) {
+      if (h && h.id === hwid) { h.doneOn = R.toISO(stateNow()); hit = true; }
+    });
+    if (hit) save();
+    return hit;
   }
 
   function clearPending() {
