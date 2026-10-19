@@ -582,6 +582,7 @@
 
     /* 后置救援：模型常常把整屏原文放在顶层 raw、单条任务里不给日期。
        谁没有日期，就去 raw 里找它那一行（及其后两行）自己算。 */
+    var rescuedN = 0;
     if (raw && tasks.length) {
       tasks.forEach(function (tk) {
         if (tk.dueOn && !tk.dueGuessed) return;   /* 已经算出确切日期就不动 */
@@ -595,9 +596,14 @@
           tk.dueOn = rel.dueOn;
           tk.dueTime = tk.dueTime || rel.dueTime || '';
           tk.dueGuessed = false;
-          warnings.push('「' + tk.title.slice(0, 12) + '」的截止时间是从图里的剩余时间算的，核对一下');
+          rescuedN++;
         }
       });
+    }
+
+    if (rescuedN) {
+      warnings.push((rescuedN > 1 ? rescuedN + ' 条作业的截止时间' : '截止时间') +
+        '是按图里的剩余时间算的（可能差几分钟），核对一下');
     }
 
     /* 救援之后仍然没有日期的，才提示「默认明天」 */
