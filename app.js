@@ -724,7 +724,7 @@
       return postVision(Parse.buildMessages(
         state.courses.map(function (c) { return c.name; }), viewDate, dataUrl));
     }).then(function (text) {
-      showConfirm(Parse.normalizeResult(text, { today: viewDate, courses: state.courses }));
+      showResult(Parse.normalizeResult(text, { today: viewDate, courses: state.courses }));
     }).catch(function (err) {
       openSheet('<h3>没认出来</h3><div class="sub">' + esc(err.message) + '</div>' +
         '<div class="acts"><button data-sheet="close">知道了</button>' +
@@ -732,56 +732,105 @@
     });
   }
 
-  function showConfirm(r) {
-    if (!r || !r.ok) {
+  /* 确认卡：可能有多条 —— 每条一行，改哪条都行，删掉也行 */
+  function courseOptions(selectedId) {
+    var opts = '<option value="">（不确定，先不选）</option>';
+    state.courses.forEach(function (c) {
+      opts += '<option value="' + esc(c.id) + '"' +
+        (c.id === selectedId ? ' selected' : '') + '>' + esc(c.name) + '</option>';
+    });
+    return opts;
+  }
+
+  function hwRowHTML(t, i) {
+    return '<div class="hwrow">' +
+      '<div class="hwr"><span class="idx">' + (i + 1) + '</span>' +
+        '<select data-f="course">' + courseOptions(t.courseId) + '</select>' +
+        '<button class="del" data-sheet="drop" aria-label="删掉这条">✕</button></div>' +
+      '<input data-f="title" value="' + esc(t.title) + '" placeholder="要做的事">' +
+      '<div class="row2">' +
+        '<div><label>截止</label><input type="date" data-f="due" value="' + esc(t.dueOn) + '"></div>' +
+        '<div><label>分钟</label><input type="number" data-f="min" min="5" max="240" value="' + t.estMin + '"></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function showResult(r) {
+    if (!r || (!r.tasks || !r.tasks.length)) {
       var why = !r ? '解析失败'
-        : r.reason === 'no-task' ? '图里没找到「要你做的事」'
-        : r.reason === 'no-title' ? '认出了字，但不知道要做什么'
+        : r.reason === 'no-task' ? '图里没看出「要你做的事」'
+        : r.reason === 'no-title' ? '认出了字，但没凑成一条完整的事'
         : '模型没给出能用的结果';
       openSheet('<h3>' + esc(why) + '</h3>' +
-        '<div class="sub">可以手填一条，或者换一张更清楚的图。</div>' +
+        '<div class="sub">换一张更清楚的图，或者直接手填一条。</div>' +
         (r && r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
         '<div class="acts"><button data-sheet="close">算了</button>' +
-        '<button class="primary" data-sheet="manual">手动加一条</button></div>');
+        '<button class="primary" data-sheet="retry">再试一张</button>' +
+        '</div>');
       return;
     }
-    var t = r.task;
-    var opts = '<option value="">（请选择课程）</option>';
-    state.courses.forEach(function (c) {
-      opts += '<option value="' + esc(c.id) + '"' + (c.id === t.courseId ? ' selected' : '') + '>' +
-        esc(c.name) + '</option>';
-    });
-    openSheet('<h3>认出来了，确认一下</h3><div class="sub">哪一项不对就改哪一项，改完再入库</div>' +
-      '<label>课程</label><select id="cfCourse">' + opts + '</select>' +
-      '<label>要做的事</label><input id="cfTitle" value="' + esc(t.title) + '">' +
-      '<div class="row2"><div><label>截止日期</label>' +
-      '<input type="date" id="cfDue" value="' + esc(t.dueOn) + '"></div>' +
-      '<div><label>预计分钟</label><input type="number" id="cfMin" min="5" max="240" value="' + t.estMin + '"></div></div>' +
+
+    var n = r.tasks.length;
+    var head = r.draft
+      ? '<h3>先把看到的内容列出来</h3><div class="sub">模型这次没给准话，但图里的字我读到了。改改标题、确认下日期就能用。</div>'
+      : n > 1
+        ? '<h3>认出 ' + n + ' 条，逐条确认</h3><div class="sub">图里有多条作业，我都列出来了；多的删掉、漏的补一行</div>'
+        : '<h3>认出来了，确认一下</h3><div class="sub">哪一项不对就改哪一项，改完再入库</div>';
+
+    var body = '';
+    r.tasks.forEach(function (t, i) { body += hwRowHTML(t, i); });
+
+    openSheet(head + body +
       (r.warnings && r.warnings.length ? '<div class="warn">' + r.warnings.map(esc).join('<br>') + '</div>' : '') +
       (r.raw ? '<details><summary>图里认到的原文</summary><pre>' + esc(r.raw) + '</pre></details>' : '') +
       '<div class="acts"><button data-sheet="close">不要</button>' +
-      '<button class="primary" data-sheet="save">加入作业表</button></div>');
+      '<button class="primary" data-sheet="save">全部加入（' + n + ' 条）</button></div>');
   }
 
   function saveFromSheet() {
-    var title = (($('#cfTitle') || {}).value || '').trim();
-    var dueOn = ($('#cfDue') || {}).value || '';
-    var courseId = ($('#cfCourse') || {}).value || '';
-    var estMin = Number(($('#cfMin') || {}).value) || 0;
-    if (!title) return toast('「要做的事」不能空');
-    if (!dueOn) return toast('选个截止日期');
-    state.homework.push({
-      id: 'hw' + Date.now(),
-      courseId: courseId,
-      title: title.slice(0, 60),
-      dueOn: dueOn,
-      estMin: Math.max(5, Math.min(240, estMin || 30)),
-      from: 'shot'
+    var rows = Array.prototype.slice.call(document.querySelectorAll('#sheetIn .hwrow'));
+    if (!rows.length) return toast('没有可加入的条目');
+    var added = 0, skipped = 0;
+    var base = Date.now();
+    rows.forEach(function (row, i) {
+      var pick = function (f) {
+        var el = row.querySelector('[data-f=' + f + ']');
+        return el ? el.value : '';
+      };
+      var title = String(pick('title') || '').replace(/[\s　]+/g, ' ').trim();
+      if (!title) { skipped++; return; }
+      var dueOn = pick('due') || R.addDays(viewDate, 1);
+      var estMin = Number(pick('min')) || 30;
+      state.homework.push({
+        id: 'hw' + (base + i),
+        courseId: pick('course') || '',
+        title: title.slice(0, 60),
+        dueOn: dueOn,
+        estMin: Math.max(5, Math.min(240, Math.round(estMin))),
+        from: 'shot'
+      });
+      added++;
     });
+    if (!added) return toast('至少一条要有内容');
     save();
     closeSheet();
-    toast('已加入作业表，到期那天会进今日清单');
+    toast('已加入 ' + added + ' 条作业' + (skipped ? '（' + skipped + ' 条没内容，跳过）' : '') + '，到期那天进今日清单');
     render();
+  }
+
+  /* 删掉确认卡里的一条，并把序号重排 */
+  function dropSheetRow(btn) {
+    var row = btn.closest('.hwrow');
+    if (!row) return;
+    row.parentNode.removeChild(row);
+    var rows = document.querySelectorAll('#sheetIn .hwrow');
+    if (!rows.length) { closeSheet(); return toast('都删掉了'); }
+    for (var i = 0; i < rows.length; i++) {
+      var idx = rows[i].querySelector('.idx');
+      if (idx) idx.textContent = String(i + 1);
+    }
+    var saveBtn = document.querySelector('#sheetIn [data-sheet=save]');
+    if (saveBtn) saveBtn.textContent = '全部加入（' + rows.length + ' 条）';
   }
 
   function testConnection() {
@@ -927,6 +976,7 @@
     var a = el.getAttribute('data-sheet');
     if (a === 'close') closeSheet();
     else if (a === 'save') saveFromSheet();
+    else if (a === 'drop') dropSheetRow(el);
     else if (a === 'retry') startShot();
     else if (a === 'goto-key' || a === 'manual') {
       closeSheet();
