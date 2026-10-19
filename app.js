@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v18 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v19 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -775,9 +775,11 @@
     postVision(Parse.buildTextMessages(txt, state.courses.map(function (c) { return c.name; }), viewDate))
       .then(function (text) {
         var r = Parse.normalizeResult(text, { today: viewDate, courses: state.courses });
-        if (!r.tasks || !r.tasks.length) throw new Error('模型没给出条目');
-        r.warnings = (r.warnings || []).concat([]);
-        showResult(r);
+        /* 合并：本地规则算出来的科目/标题/日期说了算（预览里看到的就是它），
+           模型只用来补空、以及本地完全认不出时顶上 */
+        var merged = Parse.mergeResults(local, r);
+        if (!merged || !merged.tasks || !merged.tasks.length) throw new Error('没认出条目');
+        showResult(merged);
       })
       .catch(function (err) {
         local.warnings = ['模型这次没用上（' + (err && err.message ? err.message : '未知原因') + '），下面是本地规则认的，检查一下']
@@ -1060,7 +1062,7 @@
 
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js?v=18').catch(function () { /* 离线缓存失败不影响使用 */ });
+      navigator.serviceWorker.register('sw.js?v=19').catch(function () { /* 离线缓存失败不影响使用 */ });
     });
   }
 })();
