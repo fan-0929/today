@@ -311,6 +311,29 @@ test('HTTP 错误翻译成人话', function () {
   assert.ok(P.explainError(400, '{"error":{"message":"invalid param"}}').indexOf('invalid param') >= 0);
 });
 
+/* ---------------- 请求体：max_tokens 必须落在 [1,1024] ---------------- */
+
+test('请求体：默认 max_tokens 不超过智谱上限 1024', function () {
+  var b = P.buildRequestBody('glm-4v-flash', []);
+  assert.ok(b.max_tokens >= 1 && b.max_tokens <= 1024, '实际 ' + b.max_tokens);
+});
+
+test('请求体：传大了会被夹到 1024（线上曾因 1500 被拒）', function () {
+  assert.strictEqual(P.buildRequestBody('glm-4v-flash', [], { maxTokens: 1500 }).max_tokens, 1024);
+  assert.strictEqual(P.buildRequestBody('glm-4v-flash', [], { maxTokens: 99999 }).max_tokens, 1024);
+});
+
+test('请求体：传小了照用，传 0 走默认', function () {
+  assert.strictEqual(P.buildRequestBody('glm-4v-flash', [], { maxTokens: 300 }).max_tokens, 300);
+  assert.strictEqual(P.buildRequestBody('glm-4v-flash', [], { maxTokens: 0 }).max_tokens, 1024);
+});
+
+test('错误归因：max_tokens 被拒给的是人话，不是原始报文', function () {
+  var s = P.explainError(400, '{"error":{"message":"max_tokens参数非法：限制数值范围[1,1024]"}}');
+  assert.ok(s.indexOf('max_tokens') >= 0, s);
+  assert.ok(s.indexOf('刷新页面') >= 0, s);
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
