@@ -2,6 +2,7 @@
 'use strict';
 var assert = require('assert');
 var R = require('./rules.js');
+var Seed = require('./seed.js');
 
 var pass = 0;
 var fail = 0;
@@ -396,6 +397,61 @@ test('作业台账：同一天截止的顺序稳定', function () {
   var b = R.homeworkList(s, '2026-10-19').map(function (x) { return x.hw.id; });
   assert.deepStrictEqual(a, b);
   assert.deepStrictEqual(a, ['x1', 'x2']);
+});
+
+/* ---------------- 简单版今日清单 dailyList ---------------- */
+
+test('dailyList：今天有 3 门课 → 英语 1 条 + 每门 2 条', function () {
+  var s = Seed.defaultState();
+  var r = R.dailyList(s, '2026-10-19');
+  assert.strictEqual(r.courses.length, 3);
+  assert.strictEqual(r.list.length, 7);
+  assert.strictEqual(r.list[0].kind, 'en');           // 英语永远排第一
+  assert.deepStrictEqual(r.list.map(function (t) { return t.kind; }),
+    ['en', 'pre', 'rev', 'pre', 'rev', 'pre', 'rev']);
+});
+
+test('dailyList：按上课节次从前到后，不是按课程名字母', function () {
+  var s = Seed.defaultState();
+  var r = R.dailyList(s, '2026-10-19');
+  assert.deepStrictEqual(
+    r.list.filter(function (t) { return t.kind === 'pre'; }).map(function (t) { return t.courseName; }),
+    ['程序设计(C语言)', '高等数学A(1)', '大学化学实验']);
+});
+
+test('dailyList：当天本身有英语课 → 不再重复加那条固定英语', function () {
+  var s = Seed.defaultState();
+  var r = R.dailyList(s, '2026-10-21');   // 周三有 大学英语C(1)
+  assert.strictEqual(r.hasEnglish, true);
+  assert.deepStrictEqual(r.list.filter(function (t) { return t.kind === 'en'; }).length, 0);
+  assert.strictEqual(r.list.filter(function (t) { return t.courseId === 'english'; }).length, 2);
+});
+
+test('dailyList：周末没课，只剩英语这一条', function () {
+  var s = Seed.defaultState();
+  var r = R.dailyList(s, '2026-10-24');   // 周六
+  assert.strictEqual(r.courses.length, 0);
+  assert.strictEqual(r.list.length, 1);
+  assert.strictEqual(r.list[0].kind, 'en');
+});
+
+test('dailyList：勾掉的不再出现，且不同天互不影响', function () {
+  var s = Seed.defaultState();
+  var one = R.dailyList(s, '2026-10-19');
+  s.done[one.list[1].id] = 1;             // 勾掉周一的「课前预习：程序设计」
+  var after = R.dailyList(s, '2026-10-19');
+  assert.strictEqual(after.list.length, 6);
+  assert.strictEqual(after.list.some(function (t) { return t.id === one.list[1].id; }), false);
+  assert.strictEqual(R.dailyList(s, '2026-10-20').list.length, 7);
+});
+
+test('dailyList：任务标题里不带章节名和分钟数', function () {
+  var s = Seed.defaultState();
+  R.dailyList(s, '2026-10-19').all.forEach(function (t) {
+    assert.strictEqual(/第[\d一二三四五六七八九十]+章/.test(t.title), false);
+    assert.strictEqual(/分钟/.test(t.title), false);
+    assert.strictEqual(t.estMin, undefined);
+  });
 });
 
 /* ---------------- 汇总 ---------------- */
