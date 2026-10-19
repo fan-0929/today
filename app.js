@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v19 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v20 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -713,11 +713,11 @@
     });
   }
 
-  /* 打字/粘贴一句话 → 边写边认 → 确认后入表（不联网、不用 Key） */
+  /* 打字/粘贴一句话 → 边写边认 → 确认后入表（纯本地规则：不联网、不用 Key） */
   function startType() {
     openSheet('<h3>写一句话，我来认</h3>' +
       '<div class="sub">一行一条，比如「高数习题 4.1 周三前交」「英语作文 3 小时后交」。' +
-      (hasKey() ? '填了 Key：点「认一下」会先让模型读一遍，更准。' : '不填 Key 也能用，纯本地规则。') + '</div>' +
+      '纯本地规则，不联网也不用 Key。' + '</div>' +
       '<textarea id="typeBox" class="ta" rows="3" placeholder="在这里打字或粘贴…"></textarea>' +
       '<div id="typePrev" class="prev"></div>' +
       '<div class="acts"><button data-sheet="close">取消</button>' +
@@ -766,26 +766,9 @@
 
     var local = Parse.parseText(txt, { today: viewDate, courses: state.courses });
 
-    /* 填了 Key 就先让模型读一遍（更准）；没网/没 Key/出错就退回本地规则 */
-    if (!hasKey()) {
-      showResult(local);
-      return;
-    }
-    openSheet('<h3>正在认这段话…</h3><div class="sub">交给模型读一遍，通常 2–5 秒；不通就自动退回本地规则</div>');
-    postVision(Parse.buildTextMessages(txt, state.courses.map(function (c) { return c.name; }), viewDate))
-      .then(function (text) {
-        var r = Parse.normalizeResult(text, { today: viewDate, courses: state.courses });
-        /* 合并：本地规则算出来的科目/标题/日期说了算（预览里看到的就是它），
-           模型只用来补空、以及本地完全认不出时顶上 */
-        var merged = Parse.mergeResults(local, r);
-        if (!merged || !merged.tasks || !merged.tasks.length) throw new Error('没认出条目');
-        showResult(merged);
-      })
-      .catch(function (err) {
-        local.warnings = ['模型这次没用上（' + (err && err.message ? err.message : '未知原因') + '），下面是本地规则认的，检查一下']
-          .concat(local.warnings || []);
-        showResult(local);
-      });
+    /* 文字这条路只走本地规则：不联网、不花 Key、也不会被模型算错日期。
+       （Key 只给拍照识别用。） */
+    showResult(local);
   }
 
   /* 确认卡：可能有多条 —— 每条一行，改哪条都行，删掉也行 */
@@ -1062,7 +1045,7 @@
 
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js?v=19').catch(function () { /* 离线缓存失败不影响使用 */ });
+      navigator.serviceWorker.register('sw.js?v=20').catch(function () { /* 离线缓存失败不影响使用 */ });
     });
   }
 })();
