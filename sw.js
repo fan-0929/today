@@ -1,7 +1,7 @@
 /* 离线缓存：改动优先走网络，断网时才用缓存——这样每次发版都能立刻看到，
    不会出现「明明改了、手机上还是旧代码」。
    注：老版本是 cache-first，所以这次更新需要刷新两次（第一次换 SW，第二次拿新文件）。 */
-var CACHE = 'today-v14';
+var CACHE = 'today-v15';
 var FILES = ['./', 'index.html', 'app.js', 'parse.js', 'rules.js', 'seed.js',
   'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 
