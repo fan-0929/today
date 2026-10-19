@@ -17,6 +17,8 @@
     var m = /[?&]d=(\d{4}-\d{2}-\d{2})/.exec(location.search);
     return R && m ? m[1] : R.toISO(stateNow());
   })();
+  /* 点了勾选但还没确认的那一条（防止误触直接把任务划掉） */
+  var pendingDone = null;
 
   /* ---------------- 存取 ---------------- */
 
@@ -123,13 +125,14 @@
 
   function taskHTML(t, rank) {
     var done = !!state.done[t.id];
+    var pend = pendingDone === t.id;
     var tagClass = t.prio >= 100 ? 'hot' : t.prio >= 60 ? 'warm' : '';
     var meta = [];
     meta.push('<span class="tag ' + tagClass + '">' + esc(KIND_LABEL[t.kind] || t.kind) + '</span>');
     meta.push('<span>' + esc(t.courseName) + '</span>');
     if (t.estMin) meta.push('<span>约 ' + t.estMin + ' 分钟</span>');
     return '' +
-      '<div class="todo' + (done ? ' done' : '') + '" data-id="' + esc(t.id) + '">' +
+      '<div class="todo' + (done ? ' done' : '') + (pend ? ' pend' : '') + '" data-id="' + esc(t.id) + '">' +
         (rank ? '<div class="rank">' + rank + '</div>' : '') +
         '<div class="body">' +
           '<div class="tt">' + esc(t.title) + '</div>' +
@@ -137,7 +140,12 @@
           '<div class="meta">' + meta.join('') + '</div>' +
         '</div>' +
         '<button class="box" aria-label="完成">✓</button>' +
-      '</div>';
+      '</div>' +
+      (pend ? '<div class="confirm">' +
+        '<div class="q">点错了？现在还能后悔。</div>' +
+        '<button class="b primary" data-act="confirmDone" data-id="' + esc(t.id) + '">确定做了</button>' +
+        '<button class="b" data-act="cancelDone">取消</button>' +
+        '</div>' : '');
   }
 
   function renderToday() {
@@ -717,17 +725,32 @@
       var a = act.getAttribute('data-act');
       if (a === 'baseline') setBaseline();
       else if (a === 'shoot') startShot();
+      else if (a === 'confirmDone') commitDone(act.getAttribute('data-id'));
+      else if (a === 'cancelDone') { pendingDone = null; render(); }
       return;
     }
     var t = e.target.closest ? e.target.closest('.todo, .li') : null;
     if (!t) return;
     var id = t.getAttribute('data-id');
     if (!id) return;
+    if (pendingDone === id) return;   /* 已经在等确认，别重复触发 */
+    pendingDone = id;                 /* 先不写库，等「确定做了」 */
+    render();
+  }
+
+  function commitDone(id) {
+    pendingDone = null;
     if (state.done[id]) delete state.done[id];
     else state.done[id] = Date.now();
     save();
-    toast(state.done[id] ? '勾掉了，还剩 ' + (R.buildTasks(state, viewDate).all.length) + ' 件' : '已取消勾选');
+    var left = R.buildTasks(state, viewDate).all.length;
+    toast(state.done[id] ? '记下了，还剩 ' + left + ' 件' : '已取消勾选');
     render();
+  }
+
+  function clearPending() {
+    if (pendingDone) { pendingDone = null; return true; }
+    return false;
   }
 
   function syncURL() {
@@ -750,6 +773,7 @@
   }
 
   function shiftDay(n) {
+    clearPending();
     viewDate = R.addDays(viewDate, n);
     render();
   }
@@ -766,6 +790,7 @@
   $('#view').addEventListener('click', onViewClick);
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.addEventListener('click', function () {
+      clearPending();
       tab = b.getAttribute('data-tab');
       render();
       window.scrollTo({ top: 0, behavior: 'smooth' });
