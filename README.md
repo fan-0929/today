@@ -37,18 +37,12 @@ python -m http.server 8000
 # 手机连同一个 Wi-Fi，浏览器打开 http://<电脑局域网IP>:8000
 ```
 
-**正式用（GitHub Pages）**：
+**正式用（已部署）**：打开 <https://fan-0929.github.io/today/>，手机用这个地址，别用局域网地址（两份数据不互通）。
 
-```powershell
-cd E:\deepseek.v4\today
-git init -b main
-git add .
-git commit -m "今天做什么 v1"
-gh repo create today --public --source . --push
-gh api -X POST repos/fan-0929/today/pages -f "source[branch]=main" -f "source[path]=/"
-```
+仓库：<https://github.com/fan-0929/today>（公开）。首次部署用 GitHub API 完成，因为这台机器的 `github.com:443` 不通、只有 `api.github.com` 和 `gh-proxy.com` 可达，`git push` 走不过去。以后要改页面：
 
-一分钟后打开 `https://fan-0929.github.io/today/`。
+- 改文案/小修：直接在 GitHub 网页上编辑文件，提交后 Pages 自动重建。
+- 改代码：本地改完让我重新上传，或者你自己的网络下 `git clone` → 改 → push 即可（本地 `.git` 里的提交与远端是两份历史，动手前先 `git fetch` 再 `git reset --hard origin/main`）。
 
 **装到主屏**（离线也能开）：
 - iPhone：Safari 打开 → 分享 → 添加到主屏幕
