@@ -54,6 +54,43 @@ body{
 .card.banner .bd{padding:14px 15px 11px;font-size:13px;line-height:1.7;color:var(--ink-2)}
 .card.banner .bd b{color:var(--ink)}
 .grp.backlog{background:transparent;border-style:dashed}
+
+/* ---------- 拍照加作业 ---------- */
+.shotbar{display:flex;gap:9px;margin-top:14px}
+.shot{flex:1;padding:13px 14px;border-radius:14px;border:1px solid var(--line);background:var(--paper-2);
+  color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer;box-shadow:var(--shadow);text-align:left}
+.shot:active{background:var(--line-2)}
+.shot small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-3);margin-top:3px}
+.backdrop{position:fixed;inset:0;background:rgba(20,18,14,.44);opacity:0;pointer-events:none;
+  transition:opacity .2s ease;z-index:30}
+.backdrop.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:31;max-height:88vh;overflow:auto;
+  transform:translateY(102%);transition:transform .26s cubic-bezier(.2,.8,.2,1);
+  background:var(--paper-2);border-radius:20px 20px 0 0;
+  box-shadow:0 -12px 40px -16px rgba(0,0,0,.45);
+  padding:10px 18px calc(20px + env(safe-area-inset-bottom))}
+.sheet.on{transform:translateY(0)}
+.sheet:before{content:"";display:block;width:38px;height:4px;border-radius:99px;background:var(--line);margin:2px auto 8px}
+.sheet h3{margin:6px 0 4px;font-size:16.5px;line-height:1.4}
+.sheet .sub{color:var(--ink-3);font-size:12.5px;margin-bottom:6px;line-height:1.6}
+.sheet label{display:block;font-size:12px;color:var(--ink-3);margin:13px 0 5px}
+.sheet input,.sheet select{width:100%;padding:11px;border-radius:11px;border:1px solid var(--line);
+  background:var(--paper);color:var(--ink);font:inherit;font-size:15px}
+.sheet .row2{display:flex;gap:10px}
+.sheet .row2>div{flex:1;min-width:0}
+.sheet .warn{background:color-mix(in srgb,var(--amber) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--amber) 32%,transparent);color:var(--ink-2);
+  border-radius:11px;padding:10px 12px;font-size:12.5px;line-height:1.65;margin-top:13px}
+.sheet .acts{display:flex;gap:10px;margin-top:16px}
+.sheet .acts button{flex:1;padding:13px;border-radius:12px;border:1px solid var(--line);
+  background:var(--paper);color:var(--ink);font:inherit;font-size:14.5px;font-weight:600;cursor:pointer}
+.sheet .acts button.primary{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.sheet details{margin-top:13px;font-size:12.5px;color:var(--ink-3)}
+.sheet details summary{cursor:pointer}
+.sheet details pre{white-space:pre-wrap;word-break:break-word;margin:7px 0 0;
+  font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;background:var(--paper);
+  border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--ink-2)}
+.sheet .thumb{max-height:160px;border-radius:12px;border:1px solid var(--line);margin-top:10px;display:block}
 .h{margin:26px 0 10px;font-size:12px;letter-spacing:.14em;color:var(--ink-3);font-weight:600}
 .h .n{color:var(--ink-2)}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
@@ -188,6 +225,9 @@ button.b.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 30%,t
   <main id="view"></main>
   <footer class="foot" id="foot"></footer>
 </div>
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true"><div id="sheetIn"></div></div>
+<input type="file" id="shotInput" accept="image/*" style="display:none">
 <nav class="tabs"><div class="in">
   <button data-tab="today" class="on">今日</button>
   <button data-tab="progress">进度</button>
@@ -196,6 +236,7 @@ button.b.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 30%,t
 <div class="toast" id="toast"></div>
 <script src="rules.js"></script>
 <script src="seed.js"></script>
+<script src="parse.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
