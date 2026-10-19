@@ -412,7 +412,7 @@
    * 返回 [{ hw, courseId, courseName, color, dueOn, daysLeft, state }]
    *   daysLeft > 0 逾期 / = 0 今天到期 / < 0 还没到
    */
-  function homeworkList(state, today) {
+  function homeworkList(state, today, nowAt) {
     var courses = state.courses || [];
     var byId = {};
     courses.forEach(function (c) { byId[c.id] = c; });
@@ -421,20 +421,41 @@
     });
     list.sort(function (a, b) {
       if (a.dueOn !== b.dueOn) return a.dueOn < b.dueOn ? -1 : 1;
+      var at = a.dueTime || '', bt = b.dueTime || '';
+      if (at !== bt) {
+        if (!at) return 1;      // 没写具体几点的，排在同一天后面
+        if (!bt) return -1;
+        return at < bt ? -1 : 1;
+      }
       var an = (byId[a.courseId] || {}).name || '';
       var bn = (byId[b.courseId] || {}).name || '';
       if (an !== bn) return an < bn ? -1 : 1;
       return String(a.id) < String(b.id) ? -1 : 1;
     });
+
+    var now = nowAt ? new Date(nowAt) : new Date();
+    if (isNaN(now.getTime())) now = new Date();
+
     return list.map(function (hw) {
       var c = byId[hw.courseId] || null;
       var days = diffDays(hw.dueOn, today);   // >0 逾期，0 今天到期，<0 还没到
+      var hoursLeft = null;
+      if (hw.dueTime && days === 0) {
+        var hm = String(hw.dueTime).match(/^(\d{1,2}):(\d{2})$/);
+        if (hm) {
+          var due = new Date(now.getTime());
+          due.setHours(Number(hm[1]), Number(hm[2]), 0, 0);
+          hoursLeft = Math.round(((due.getTime() - now.getTime()) / 3600000) * 10) / 10;
+        }
+      }
       return {
         hw: hw,
         courseId: hw.courseId,
         courseName: c ? c.name : (hw.courseName || '其他'),
         color: (c && c.color) || '#888',
         dueOn: hw.dueOn,
+        dueTime: hw.dueTime || '',
+        hoursLeft: hoursLeft,
         daysLeft: days,
         state: days > 0 ? 'overdue' : days === 0 ? 'today' : 'later'
       };
