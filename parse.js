@@ -422,14 +422,20 @@
 
   /* ---------- 请求体 / 错误归因 ---------- */
 
+  /* 智谱对 max_tokens 有上限（glm-4v-flash 只允许 1~1024），写 1500 会直接被拒 */
+  var MAX_TOKENS = 1024;
+
   function buildRequestBody(model, messages, opts) {
     opts = opts || {};
+    var mt = Number(opts.maxTokens) || MAX_TOKENS;
+    if (mt > MAX_TOKENS) mt = MAX_TOKENS;
+    if (mt < 1) mt = MAX_TOKENS;
     return {
       model: model || 'glm-4v-flash',
       messages: messages,
       temperature: 0.1,
       stream: false,
-      max_tokens: opts.maxTokens || 1500
+      max_tokens: mt
     };
   }
 
@@ -442,7 +448,10 @@
     if (status === 404) return '模型名不对，去设置里换成 glm-4v-plus 试试';
     if (status >= 500) return '模型服务自己出错了（' + status + '），稍后再试';
     var m = body.match(/"message"\s*:\s*"([^"]{1,120})"/);
-    return m ? '模型返回错误：' + m[1] : '识别失败（HTTP ' + status + '）';
+    var msg = m ? m[1] : '';
+    if (/max_tokens/i.test(msg + body)) return '这次请求带的参数被模型拒了（max_tokens 超范围），已经修好，刷新页面再试';
+    if (/content|图片|image|size|illegal/i.test(msg)) return '这张图模型读不了（太大或格式不支持），换一张或裁小一点';
+    return msg ? '模型返回错误：' + msg : '识别失败（HTTP ' + status + '）';
   }
 
   return {
