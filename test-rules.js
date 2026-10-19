@@ -330,6 +330,74 @@ test('复习起点后，应到只从起点算，章节定位仍按真实课次',
   assert.ok(t.nowChapter, '章节定位不受起点影响');
 });
 
+/* ---------------- 作业台账（今日页「作业」区） ---------------- */
+
+function hwState(items) {
+  return {
+    courses: [
+      { id: 'c-lang', name: '程序设计(C语言)', color: '#1f5fa8' },
+      { id: 'math', name: '高等数学A(1)', color: '#b5342a' },
+      { id: 'chem', name: '大学化学', color: '#2f6b4f' }
+    ],
+    homework: items
+  };
+}
+
+test('作业台账：按截止时间从早到晚排', function () {
+  var s = hwState([
+    { id: 'b', courseId: 'math', title: 'B', dueOn: '2026-10-26' },
+    { id: 'a', courseId: 'c-lang', title: 'A', dueOn: '2026-10-15' },
+    { id: 'c', courseId: 'chem', title: 'C', dueOn: '2026-10-19' }
+  ]);
+  var l = R.homeworkList(s, '2026-10-19');
+  assert.strictEqual(l.length, 3);
+  assert.deepStrictEqual(l.map(function (x) { return x.hw.id; }), ['a', 'c', 'b']);
+});
+
+test('作业台账：逾期/今天/还没到 三种状态与天数', function () {
+  var s = hwState([
+    { id: 'a', courseId: 'math', title: 'A', dueOn: '2026-10-16' },
+    { id: 'b', courseId: 'math', title: 'B', dueOn: '2026-10-19' },
+    { id: 'c', courseId: 'math', title: 'C', dueOn: '2026-10-22' }
+  ]);
+  var l = R.homeworkList(s, '2026-10-19');
+  assert.strictEqual(l[0].state, 'overdue');
+  assert.strictEqual(l[0].daysLeft, 3);
+  assert.strictEqual(l[1].state, 'today');
+  assert.strictEqual(l[1].daysLeft, 0);
+  assert.strictEqual(l[2].state, 'later');
+  assert.strictEqual(l[2].daysLeft, -3);
+});
+
+test('作业台账：做掉的、没填截止日的不出现', function () {
+  var s = hwState([
+    { id: 'a', courseId: 'math', title: 'A', dueOn: '2026-10-20' },
+    { id: 'b', courseId: 'math', title: 'B', dueOn: '2026-10-20', done: true },
+    { id: 'c', courseId: 'math', title: 'C', dueOn: '2026-10-20', doneOn: '2026-10-18' },
+    { id: 'd', courseId: 'math', title: 'D', dueOn: '' }
+  ]);
+  var l = R.homeworkList(s, '2026-10-19');
+  assert.strictEqual(l.length, 1);
+  assert.strictEqual(l[0].hw.id, 'a');
+});
+
+test('作业台账：认不出课程也能显示（落到「其他」）', function () {
+  var s = hwState([{ id: 'a', courseId: 'nope', title: 'A', dueOn: '2026-10-20' }]);
+  var l = R.homeworkList(s, '2026-10-19');
+  assert.strictEqual(l[0].courseName, '其他');
+});
+
+test('作业台账：同一天截止的顺序稳定', function () {
+  var s = hwState([
+    { id: 'x2', courseId: 'math', title: 'X2', dueOn: '2026-10-20' },
+    { id: 'x1', courseId: 'c-lang', title: 'X1', dueOn: '2026-10-20' }
+  ]);
+  var a = R.homeworkList(s, '2026-10-19').map(function (x) { return x.hw.id; });
+  var b = R.homeworkList(s, '2026-10-19').map(function (x) { return x.hw.id; });
+  assert.deepStrictEqual(a, b);
+  assert.deepStrictEqual(a, ['x1', 'x2']);
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
