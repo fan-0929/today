@@ -562,6 +562,46 @@ test('标题清洗：不把「剩余 / 未交」留在标题里', function () {
   assert.strictEqual(/剩余|未交/.test(t.title), false, '标题里不该有剩余/未交：' + t.title);
 });
 
+
+/* ---------------- 时间写在前面 / 口语科目名 ---------------- */
+
+function one(text) {
+  var r = P.parseText(text, { today: '2026-10-19', courses: COURSES, nowAt: '2026-10-19T21:40:00' });
+  return r.tasks[0] || null;
+}
+
+test('时间在前：70小时后交数学作业', function () {
+  var t = one('70小时后交数学作业');
+  assert.strictEqual(t.courseName, '高等数学A(1)');
+  assert.strictEqual(t.dueOn, '2026-10-22');
+  assert.strictEqual(t.dueTime, '19:40');
+});
+
+test('时间在前：这周五交物理作业', function () {
+  var t = one('这周五交物理作业');
+  assert.strictEqual(t.courseName, '大学物理A(1)');
+  assert.strictEqual(t.dueOn, '2026-10-23');
+});
+
+test('时间在后：数学作业70小时后交', function () {
+  var t = one('数学作业70小时后交');
+  assert.strictEqual(t.courseName, '高等数学A(1)');
+  assert.strictEqual(t.dueOn, '2026-10-22');
+});
+
+test('口语「数学/物理/化学」能对上具体课，不被实验课抢走', function () {
+  assert.strictEqual(one('化学作业明天交').courseName, '大学化学');
+  assert.strictEqual(one('物理作业明天交').courseName, '大学物理A(1)');
+  assert.strictEqual(one('化学实验报告 三天后').courseName, '大学化学实验');
+  assert.strictEqual(one('物理实验报告 明天').courseName, '大学物理实验A(1)');
+});
+
+test('「明天交C语言作业」标题不再被切成「言作业」', function () {
+  var t = one('明天交C语言作业');
+  assert.strictEqual(t.courseName, '程序设计(C语言)');
+  assert.strictEqual(t.title, 'C语言作业');
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
