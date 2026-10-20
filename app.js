@@ -103,7 +103,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v22 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v23 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -371,14 +371,23 @@
       '<button class="b" id="testKey">测试连接</button>' +
       (hasKey() ? '<button class="b danger" id="clearKey">清除 Key</button>' : '') + '</div></div>';
 
-    html += '<div class="h">作业 <span class="n">' + (state.homework || []).length + ' 条</span></div><div class="card">';
-    if (!(state.homework || []).length) {
+    /* 作业卡：设置页只管「还没交的」；做完的留在数据里，只是不在这里占地方 */
+    var allHw = state.homework || [];
+    var openHw = allHw.filter(function (hw) { return hw && !hw.done && !hw.doneOn; });
+    var doneHwN = allHw.length - openHw.length;
+
+    html += '<div class="h">作业 <span class="n">' + openHw.length + ' 条没做完' +
+      (doneHwN ? ' · 已完成 ' + doneHwN + ' 条（已隐藏）' : '') + '</span></div><div class="card">';
+    if (!allHw.length) {
       html += '<div class="empty" style="padding:16px 15px">还没有作业。只有「到期或逾期」的作业会进今日清单。</div>';
+    } else if (!openHw.length) {
+      html += '<div class="empty" style="padding:16px 15px">这 ' + allHw.length +
+        ' 条都做完了。做完的还留着（导出里有），只是不在这儿显示。</div>';
     } else {
-      state.homework.forEach(function (hw, i) {
+      openHw.forEach(function (hw) {
         html += '<div class="hw"><span>' + esc(hw.title) + '</span>' +
           '<span style="color:var(--ink-3);font-size:11.5px">' + esc(R.fmtCN(hw.dueOn)) + '</span>' +
-          '<span class="x" data-delhw="' + i + '">删除</span></div>';
+          '<span class="x" data-delhw="' + esc(hw.id) + '">删除</span></div>';
       });
     }
     html += '<div class="field"><label>新作业</label>' +
@@ -484,7 +493,14 @@
 
     Array.prototype.forEach.call(document.querySelectorAll('[data-delhw]'), function (el) {
       el.onclick = function () {
-        state.homework.splice(Number(el.getAttribute('data-delhw')), 1);
+        /* 按 id 删，不按下标：列表是过滤过的，下标会对不上 */
+        var id = el.getAttribute('data-delhw');
+        var idx = -1;
+        (state.homework || []).forEach(function (hw, i) {
+          if (hw && String(hw.id) === String(id)) idx = i;
+        });
+        if (idx < 0) return toast('这条已经不在了，刷新一下');
+        state.homework.splice(idx, 1);
         save();
         render();
       };
@@ -1045,7 +1061,7 @@
 
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js?v=22').catch(function () { /* 离线缓存失败不影响使用 */ });
+      navigator.serviceWorker.register('sw.js?v=23').catch(function () { /* 离线缓存失败不影响使用 */ });
     });
   }
 })();
