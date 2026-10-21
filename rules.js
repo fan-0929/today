@@ -412,6 +412,27 @@
    * 返回 [{ hw, courseId, courseName, color, dueOn, daysLeft, state }]
    *   daysLeft > 0 逾期 / = 0 今天到期 / < 0 还没到
    */
+  /**
+   * 「快到点了」的作业：hoursLeft <= 窗口（含已经过点的负数），
+   * 没写几点的只把「今天到期」算进来。顺序沿用 homeworkList（按截止时间）。
+   */
+  function dueSoon(state, today, nowAt, withinHours) {
+    var within = (withinHours == null) ? 24 : Number(withinHours);
+    if (!isFinite(within) || within <= 0) within = 24;
+    var now = nowAt ? new Date(nowAt) : new Date();
+    if (isNaN(now.getTime())) now = new Date();
+    var out = [];
+    homeworkList(state, today, now).forEach(function (x) {
+      if (x.hoursLeft != null) {
+        /* 只看「刚过点（24 小时内）」到「窗口内」这两头；陈年老逾期不往横幅里塞 */
+        if (x.hoursLeft <= within && x.hoursLeft >= -24) out.push(x);
+      } else if (x.daysLeft === 0) {
+        out.push(x);
+      }
+    });
+    return out;
+  }
+
   function homeworkList(state, today, nowAt) {
     var courses = state.courses || [];
     var byId = {};
@@ -440,10 +461,11 @@
       var c = byId[hw.courseId] || null;
       var days = diffDays(hw.dueOn, today);   // >0 逾期，0 今天到期，<0 还没到
       var hoursLeft = null;
-      if (hw.dueTime && days === 0) {
+      if (hw.dueTime) {
         var hm = String(hw.dueTime).match(/^(\d{1,2}):(\d{2})$/);
         if (hm) {
-          var due = new Date(now.getTime());
+          /* 用「截止那天 + 几点」算，明天的 10:00 也能算出还剩几小时 */
+          var due = toDate(hw.dueOn);
           due.setHours(Number(hm[1]), Number(hm[2]), 0, 0);
           hoursLeft = Math.round(((due.getTime() - now.getTime()) / 3600000) * 10) / 10;
         }
@@ -598,6 +620,7 @@
     chapterAt: chapterAt,
     buildTasks: buildTasks,
     homeworkList: homeworkList,
+    dueSoon: dueSoon,
     nextSessionAfter: nextSessionAfter,
     courseStats: courseStats,
     upcomingSummary: upcomingSummary
