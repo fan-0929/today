@@ -19,6 +19,9 @@
   })();
   /* 点了勾选但还没确认的那一条（防止误触直接把任务划掉） */
   var pendingDone = null;
+  var suppressClick = false;   /* 长按刚开过编辑卡，别让紧随的 click 把作业勾掉 */
+  var pressTimer = null;
+  var pressStart = null;
 
   /* ---------------- 存取 ---------------- */
 
@@ -103,7 +106,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v23 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v24 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -155,7 +158,7 @@
     else if (x.daysLeft === -1) { badge = '明天到期'; cls = 'warm'; }
     else { badge = '还有 ' + (-x.daysLeft) + ' 天'; }
     return '' +
-      '<div class="todo hw' + (pend ? ' pend' : '') + '" data-id="' + esc(id) + '">' +
+      '<div class="todo hw' + (pend ? ' pend' : '') + '" data-id="' + esc(id) + '" data-hwid="' + esc(x.hw.id) + '">' +
         '<div class="body">' +
           '<div class="tt"><i class="cdot" style="background:' + esc(x.color) + '"></i>' +
             esc(x.hw.title) + '</div>' +
@@ -385,8 +388,9 @@
         ' 条都做完了。做完的还留着（导出里有），只是不在这儿显示。</div>';
     } else {
       openHw.forEach(function (hw) {
-        html += '<div class="hw"><span>' + esc(hw.title) + '</span>' +
+        html += '<div class="hw" data-hwid="' + esc(hw.id) + '"><span>' + esc(hw.title) + '</span>' +
           '<span style="color:var(--ink-3);font-size:11.5px">' + esc(R.fmtCN(hw.dueOn)) + '</span>' +
+          '<span class="x" data-edithw="' + esc(hw.id) + '">改</span>' +
           '<span class="x" data-delhw="' + esc(hw.id) + '">删除</span></div>';
       });
     }
@@ -491,20 +495,7 @@
       };
     }
 
-    Array.prototype.forEach.call(document.querySelectorAll('[data-delhw]'), function (el) {
-      el.onclick = function () {
-        /* 按 id 删，不按下标：列表是过滤过的，下标会对不上 */
-        var id = el.getAttribute('data-delhw');
-        var idx = -1;
-        (state.homework || []).forEach(function (hw, i) {
-          if (hw && String(hw.id) === String(id)) idx = i;
-        });
-        if (idx < 0) return toast('这条已经不在了，刷新一下');
-        state.homework.splice(idx, 1);
-        save();
-        render();
-      };
-    });
+    /* 作业的「改 / 删除」统一走 document 上的 onViewClick（一处逻辑，避免重复绑定） */
 
     $('#copy').onclick = function () {
       var built = R.buildTasks(state, viewDate);
@@ -649,6 +640,69 @@
     $('#backdrop').classList.remove('on');
   }
 
+  /* ---------- 长按作业 → 改这一条 ---------- */
+
+  function findHw(id) {
+    var hit = null;
+    (state.homework || []).forEach(function (h) {
+      if (h && String(h.id) === String(id)) hit = h;
+    });
+    return hit;
+  }
+
+  function openEditSheet(hwid) {
+    var hw = findHw(hwid);
+    if (!hw) return toast('这条作业找不到了');
+    var opts = state.courses.map(function (c) {
+      return '<option value="' + esc(c.id) + '"' + (c.id === hw.courseId ? ' selected' : '') + '>' +
+        esc(c.name) + '</option>';
+    }).join('');
+    openSheet('<h3>改这条作业</h3>' +
+      '<div class="sub">改完点「保存」；日期、几点、分钟都能调，也能直接删。</div>' +
+      '<div class="field"><label>科目</label><select id="edCourse">' +
+      '<option value=""' + (!hw.courseId ? ' selected' : '') + '>（不确定，先不选）</option>' + opts + '</select></div>' +
+      '<div class="field"><label>要做的事</label><input id="edTitle" value="' + esc(hw.title || '') + '" placeholder="如：习题 1.4 第 1-8 题"></div>' +
+      '<div class="row2">' +
+      '<div data-w="date"><label>截止</label><input type="date" id="edDue" value="' + esc(hw.dueOn || viewDate) + '"></div>' +
+      '<div data-w="time"><label>几点（可空）</label><input type="time" id="edTime" value="' + esc(hw.dueTime || '') + '"></div>' +
+      '<div data-w="min"><label>分钟</label><input type="number" id="edMin" min="5" max="240" value="' + (hw.estMin || 30) + '"></div>' +
+      '</div>' +
+      '<div class="acts"><button data-sheet="close">取消</button>' +
+      '<button data-act="delHw" data-id="' + esc(hw.id) + '">删除</button>' +
+      '<button class="primary" data-act="saveHw" data-id="' + esc(hw.id) + '">保存</button></div>');
+  }
+
+  function saveHomework(id) {
+    var hw = findHw(id);
+    if (!hw) { closeSheet(); return toast('这条作业已经不在了'); }
+    var title = String(($('#edTitle') || {}).value || '').replace(/[\s　]+/g, ' ').trim();
+    if (!title) return toast('「要做的事」不能空着');
+    hw.courseId = (($('#edCourse') || {}).value) || '';
+    hw.title = title.slice(0, 60);
+    hw.dueOn = (($('#edDue') || {}).value) || hw.dueOn;
+    hw.dueTime = (($('#edTime') || {}).value) || '';
+    var m = Number((($('#edMin') || {}).value));
+    hw.estMin = isFinite(m) && m > 0 ? Math.max(5, Math.min(240, Math.round(m))) : (hw.estMin || 30);
+    save();
+    closeSheet();
+    toast('改好了');
+    render();
+  }
+
+  function deleteHomework(id) {
+    var idx = -1;
+    (state.homework || []).forEach(function (h, i) {
+      if (h && String(h.id) === String(id)) idx = i;
+    });
+    if (idx < 0) { closeSheet(); return toast('这条作业已经不在了'); }
+    if (!confirm('删掉「' + (state.homework[idx].title || '这条') + '」？删了就没了')) return;
+    state.homework.splice(idx, 1);
+    save();
+    closeSheet();
+    toast('已删除');
+    render();
+  }
+
   /** 长边压到 1600、JPEG 0.82：上传快，顺便把照片的 EXIF（含定位）丢掉 */
   function compressImage(file) {
     return new Promise(function (resolve, reject) {
@@ -723,9 +777,17 @@
     }).then(function (text) {
       showResult(Parse.normalizeResult(text, { today: viewDate, courses: state.courses }));
     }).catch(function (err) {
-      openSheet('<h3>没认出来</h3><div class="sub">' + esc(err.message) + '</div>' +
+      var msg = err && err.message ? err.message : '未知错误';
+      var k = apiKey();
+      openSheet('<h3>没认出来</h3>' +
+        '<div class="sub">' + esc(msg) + '</div>' +
+        '<div class="warn" style="margin-top:10px">这张图没传成功时，一分钱额度都不会扣。<br>' +
+        '当前模型：' + esc(modelName() || 'glm-4v-flash') +
+        ' · Key：' + (k ? '已填（尾号 ' + esc(k.slice(-4)) + '）' : '没填') + '</div>' +
         '<div class="acts"><button data-sheet="close">知道了</button>' +
-        '<button class="primary" data-sheet="retry">再试一张</button></div>');
+        '<button class="primary" data-sheet="retry">再试一张</button></div>' +
+        '<div class="acts"><button data-sheet="manual">改用打字</button>' +
+        '<button data-sheet="goto-key">去检查 Key</button></div>');
     });
   }
 
@@ -915,6 +977,8 @@
   }
 
   function onViewClick(e) {
+    /* 长按刚触发过：别再当成「点一下勾掉」 */
+    if (suppressClick) { suppressClick = false; return; }
     var act = e.target.closest ? e.target.closest('[data-act]') : null;
     if (act) {
       var a = act.getAttribute('data-act');
@@ -922,10 +986,17 @@
       else if (a === 'shoot') startShot();
       else if (a === 'type') startType();
       else if (a === 'typeGo') submitType();
+      else if (a === 'saveHw') saveHomework(act.getAttribute('data-id'));
+      else if (a === 'delHw') deleteHomework(act.getAttribute('data-id'));
       else if (a === 'confirmDone') commitDone(act.getAttribute('data-id'));
       else if (a === 'cancelDone') { pendingDone = null; render(); }
       return;
     }
+    var eh = e.target.closest ? e.target.closest('[data-edithw]') : null;
+    if (eh) { openEditSheet(eh.getAttribute('data-edithw')); return; }
+    var dh = e.target.closest ? e.target.closest('[data-delhw]') : null;
+    if (dh) { deleteHomework(dh.getAttribute('data-delhw')); return; }
+
     var t = e.target.closest ? e.target.closest('.todo, .li') : null;
     if (!t) return;
     var id = t.getAttribute('data-id');
@@ -1024,6 +1095,37 @@
     toast('回到今天');
   });
 
+  /* 长按作业行（今日页作业、设置页作业）→ 打开「改这条」卡片 */
+  (function () {
+    var LONG = 550, MOVE = 12;
+    function clearPress() {
+      if (pressTimer) clearTimeout(pressTimer);
+      pressTimer = null;
+      pressStart = null;
+    }
+    document.addEventListener('pointerdown', function (e) {
+      var row = e.target.closest ? e.target.closest('[data-hwid]') : null;
+      if (!row) return;
+      if (e.target.closest && e.target.closest('.x, button, input, select')) return;
+      pressStart = { x: e.clientX, y: e.clientY };
+      if (pressTimer) clearTimeout(pressTimer);
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        suppressClick = true;
+        pressStart = null;
+        try { if (navigator.vibrate) navigator.vibrate(12); } catch (err) { /* 有的浏览器不给振动 */ }
+        openEditSheet(row.getAttribute('data-hwid'));
+      }, LONG);
+    }, { passive: true });
+    document.addEventListener('pointermove', function (e) {
+      if (!pressStart || !pressTimer) return;
+      if (Math.abs(e.clientX - pressStart.x) > MOVE || Math.abs(e.clientY - pressStart.y) > MOVE) clearPress();
+    }, { passive: true });
+    document.addEventListener('pointerup', clearPress, { passive: true });
+    document.addEventListener('pointercancel', clearPress, { passive: true });
+    window.addEventListener('scroll', clearPress, true);
+  })();
+
   /* 拍照识别相关的挂载 */
   $('#shotInput').addEventListener('change', function (e) {
     var f = e.target.files && e.target.files[0];
@@ -1039,10 +1141,14 @@
     else if (a === 'save') saveFromSheet();
     else if (a === 'drop') dropSheetRow(el);
     else if (a === 'retry') startShot();
-    else if (a === 'goto-key' || a === 'manual') {
+    else if (a === 'goto-key') {
       closeSheet();
       tab = 'settings';
       render();
+    }
+    else if (a === 'manual') {
+      closeSheet();
+      startType();
     }
   });
 
@@ -1061,7 +1167,7 @@
 
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js?v=23').catch(function () { /* 离线缓存失败不影响使用 */ });
+      navigator.serviceWorker.register('sw.js?v=24').catch(function () { /* 离线缓存失败不影响使用 */ });
     });
   }
 })();
