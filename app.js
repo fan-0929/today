@@ -106,7 +106,7 @@
     return '第 ' + w + ' 周';
   }
 
-  var BUILD = 'v24 · 2026-10-19';   /* 页脚可见，方便核对手机上跑的是哪一版 */
+  var BUILD = 'v25 · 2026-10-21';   /* 页脚可见，方便核对手机上跑的是哪一版 */
 
   var KIND_LABEL = {
     'hw-overdue': '逾期作业', 'hw-due': '今天截止', 'review-after': '课后当天',
@@ -224,6 +224,20 @@
     }
 
     /* 两条入口：拍照认字（要 Key）/ 自己打一句话（不要 Key） */
+    /* 快到点的作业：页面里的橙色横条（不需要任何权限，一打开就能看见） */
+    var soon = R.dueSoon(state, d, new Date(), 24).filter(function (x) {
+      return !(state.snooze && state.snooze[x.hw.id] === d);
+    });
+    if (soon.length) {
+      var top = soon[0];
+      html += '<div class="card banner"><div class="bd">⏰ <b>' + esc(top.hw.title || '作业') + '</b> ' +
+        esc(dueText(top)) + (top.courseName ? ' · ' + esc(top.courseName) : '') +
+        (soon.length > 1 ? '<br>另外 ' + (soon.length - 1) + ' 条也在 24 小时内到期' : '') +
+        '</div><div class="btns" style="border-top:0;padding-top:0">' +
+        '<button class="b" data-act="snoozeSoon" data-id="' + esc(top.hw.id) + '">今天别再提醒这条</button>' +
+        '</div></div>';
+    }
+
     html += '<div class="shotbar">' +
       '<button class="shot" data-act="shoot">📷 拍照 / 截图' +
       '<small>' + (hasKey() ? '模型认字，你再确认' : '先在设置里填 Key') + '</small></button>' +
@@ -389,7 +403,7 @@
     } else {
       openHw.forEach(function (hw) {
         html += '<div class="hw" data-hwid="' + esc(hw.id) + '"><span>' + esc(hw.title) + '</span>' +
-          '<span style="color:var(--ink-3);font-size:11.5px">' + esc(R.fmtCN(hw.dueOn)) + '</span>' +
+          '<span style="color:var(--ink-3);font-size:11.5px;white-space:nowrap">' + esc(String(hw.dueOn || '').slice(5).replace('-', '/')) + '</span>' +
           '<span class="x" data-edithw="' + esc(hw.id) + '">改</span>' +
           '<span class="x" data-delhw="' + esc(hw.id) + '">删除</span></div>';
       });
@@ -401,6 +415,25 @@
       '<div class="field"><label>内容</label><input id="hwTitle" placeholder="如：习题 1.4 第 1-8 题"></div>' +
       '<div class="field"><label>截止日期</label><input type="date" id="hwDue" value="' + esc(viewDate) + '"></div>' +
       '<div class="btns"><button class="b primary" id="addHw">加进作业表</button></div></div>';
+
+    /* 到期提醒：页面里的橙色横条永远可用；系统通知只在页面开着时能响（没有服务器） */
+    var nOn = (typeof Notification !== 'undefined') && Notification.permission === 'granted';
+    var nPerm = (typeof Notification === 'undefined') ? '不支持'
+      : Notification.permission === 'granted' ? '已允许'
+        : Notification.permission === 'denied' ? '被拒绝（去浏览器设置里改）' : '还没问过';
+    html += '<div class="h">到期提醒 <span class="n">通知' + esc(nPerm) + '</span></div><div class="card">' +
+      '<div class="field"><label>提前多久提醒</label><select id="ntHours">' +
+      [0.5, 1, 3, 6, 24].map(function (h) {
+        return '<option value="' + h + '"' + (Number(notifyHours()) === h ? ' selected' : '') + '>' +
+          (h < 1 ? Math.round(h * 60) + ' 分钟' : h + ' 小时') + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="btns">' +
+      '<button class="b' + (nOn ? '' : ' primary') + '" id="ntOn">' + (nOn ? '重新申请权限' : '开启系统通知') + '</button>' +
+      '<button class="b" id="ntTest">试一条</button>' +
+      '</div>' +
+      '<div class="hint" style="padding:0 15px 14px">系统通知只在页面开着（含切到后台）时才可能响；' +
+      '关掉页面就收不到——这里没有服务器，纯前端做不到后台推送。' +
+      '页面顶部那条橙色横条不受影响，一打开就能看见。</div></div>';
 
     html += '<div class="h">数据</div><div class="card">' +
       '<div class="btns">' +
@@ -441,6 +474,28 @@
       save();
       toast('已保存，周次重算了');
       render();
+    };
+
+    if ($('#ntOn')) $('#ntOn').onclick = function () {
+      if (typeof Notification === 'undefined') return toast('这个浏览器不支持系统通知');
+      Notification.requestPermission().then(function (p) {
+        toast(p === 'granted' ? '通知开好了：页面开着时到点会响' : '没给权限（' + p + '），页面里的橙色横条照样有用');
+        render();
+      }).catch(function () { toast('申请权限失败，可能不是 https 或浏览器限制'); });
+    };
+    if ($('#ntTest')) $('#ntTest').onclick = function () {
+      if (!canNotify()) return toast('先点「开启系统通知」并允许');
+      var list = dueFor(notifyHours());
+      if (!list.length) list = dueFor(24);
+      if (!list.length) return toast('现在没有快到点的作业：先加一条，把截止时间设成马上就到的');
+      if (!showSystemNotify(true)) return toast('弹不出来（浏览器拦了），但页面横条会正常显示');
+      toast('弹了一条测试通知：' + (list[0].hw.title || '作业'));
+    };
+    if ($('#ntHours')) $('#ntHours').onchange = function () {
+      state.notifyHours = Number(this.value) || 1;
+      save();
+      render();
+      toast('提前 ' + (state.notifyHours < 1 ? Math.round(state.notifyHours * 60) + ' 分钟' : state.notifyHours + ' 小时') + '提醒');
     };
 
     $('#addHw').onclick = function () {
@@ -648,6 +703,65 @@
       if (h && String(h.id) === String(id)) hit = h;
     });
     return hit;
+  }
+
+  /* ---------- 到期提醒 ---------- */
+  var NOTIFY_SLOT = 'today.seen.v1';   /* 已经弹过的「作业id@日期」，避免反复吵 */
+
+  function notifyHours() {
+    var v = Number(state.notifyHours);
+    return (isFinite(v) && v > 0) ? v : 1;
+  }
+  function seenMap() {
+    try { return JSON.parse(lsGet(NOTIFY_SLOT) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function seenSave(o) { lsSet(NOTIFY_SLOT, JSON.stringify(o)); }
+
+  function dueFor(winHours) {
+    return R.dueSoon(state, viewDate, new Date(), winHours);
+  }
+  function dueText(x) {
+    if (x.hoursLeft == null) return '今天到期';
+    if (x.hoursLeft <= 0) return '已经过了 ' + (x.dueTime || '');
+    if (x.hoursLeft < 1) return '还有 ' + Math.max(1, Math.round(x.hoursLeft * 60)) + ' 分钟';
+    return '还有 ' + (Math.round(x.hoursLeft * 10) / 10) + ' 小时';
+  }
+
+  function canNotify() {
+    return typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  }
+
+  function showSystemNotify(force) {
+    if (!canNotify()) return 0;
+    var list = dueFor(notifyHours());
+    if (!list.length) return 0;
+    var seen = seenMap();
+    var stamp = viewDate;
+    var fired = 0;
+    list.slice(0, 2).forEach(function (x) {
+      var key = x.hw.id + '@' + stamp;
+      if (!force && seen[key]) return;
+      seen[key] = 1;
+      fired++;
+      try {
+        var n = new Notification('⏰ ' + (x.hw.title || '作业'), {
+          body: dueText(x) + ' · ' + (x.courseName || '其他'),
+          tag: key
+        });
+        n.onclick = function () { try { window.focus(); } catch (e) { /* ignore */ } };
+      } catch (e) { /* 有的浏览器只允许在 SW 里弹 */ }
+    });
+    seenSave(seen);
+    return fired;
+  }
+
+  function startNotifyLoop() {
+    if (!canNotify()) return;
+    showSystemNotify(false);
+    setInterval(function () { showSystemNotify(false); }, 60000);   /* 页面开着时每分钟看一次 */
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) showSystemNotify(false);
+    });
   }
 
   function openEditSheet(hwid) {
@@ -988,6 +1102,13 @@
       else if (a === 'typeGo') submitType();
       else if (a === 'saveHw') saveHomework(act.getAttribute('data-id'));
       else if (a === 'delHw') deleteHomework(act.getAttribute('data-id'));
+      else if (a === 'snoozeSoon') {
+        state.snooze = state.snooze || {};
+        state.snooze[act.getAttribute('data-id')] = viewDate;
+        save();
+        toast('这条今天不再提醒（横条和列表都还在，只是不喊你）');
+        render();
+      }
       else if (a === 'confirmDone') commitDone(act.getAttribute('data-id'));
       else if (a === 'cancelDone') { pendingDone = null; render(); }
       return;
@@ -1059,6 +1180,11 @@
     Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-tab') === tab);
     });
+    /* 标签页标题也带数字：切到别的 App 时一眼能看到 */
+    var urgent = R.dueSoon(state, viewDate, new Date(), 24).filter(function (x) {
+      return !(state.snooze && state.snooze[x.hw.id] === viewDate);
+    }).length;
+    try { document.title = (urgent ? '⏰' + urgent + ' · ' : '') + '今天做什么'; } catch (e) { /* ignore */ }
     syncURL();
   }
 
@@ -1079,6 +1205,7 @@
 
   /* 绑在 document 上：确认卡（#sheet）在 #view 外面，绑 #view 就点不到「认一下」 */
   document.addEventListener('click', onViewClick);
+  startNotifyLoop();   /* 允许了通知就每分钟看一次（页面开着才有意义） */
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.addEventListener('click', function () {
       clearPending();
@@ -1167,7 +1294,7 @@
 
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js?v=24').catch(function () { /* 离线缓存失败不影响使用 */ });
+      navigator.serviceWorker.register('sw.js?v=25').catch(function () { /* 离线缓存失败不影响使用 */ });
     });
   }
 })();
