@@ -512,6 +512,58 @@ test('dailyList：第 4 天就自己消失，不会越积越多', function () {
   assert.strictEqual(ids.some(function (id) { return id.indexOf('2026-10-16#') === 0; }), false);
 });
 
+/* ---------------- 到期提醒：dueSoon 窗口 ---------------- */
+
+function soonFixture() {
+  var s = fixture();
+  var today = '2026-10-21';
+  function add(id, dueOn, dueTime, extra) {
+    var o = { id: id, courseId: 'math', title: id, dueOn: dueOn };
+    if (dueTime) o.dueTime = dueTime;
+    if (extra) for (var k in extra) o[k] = extra[k];
+    s.homework.push(o);
+  }
+  add('过点1h', today, '19:40');
+  add('1小时后', today, '21:40');
+  add('4小时后', '2026-10-22', '00:40');
+  add('明天上午', '2026-10-22', '10:00');
+  add('后天', '2026-10-23', '10:00');
+  add('今天没几点', today);
+  add('三天前逾期', '2026-10-18', '10:00');
+  add('已完成', today, '21:00', { doneOn: today });
+  return s;
+}
+
+test('dueSoon：1 小时窗口只喊「马上到」和「刚过点」', function () {
+  var s = soonFixture();
+  var names = R.dueSoon(s, '2026-10-21', '2026-10-21T20:40:00', 1).map(function (x) { return x.hw.title; });
+  assert.strictEqual(names.indexOf('1小时后') >= 0, true, names.join(','));
+  assert.strictEqual(names.indexOf('过点1h') >= 0, true, '刚过点也要喊：' + names.join(','));
+  assert.strictEqual(names.indexOf('4小时后') >= 0, false);
+  assert.strictEqual(names.indexOf('明天上午') >= 0, false);
+});
+
+test('dueSoon：24 小时窗口含明天上午，但不含后天/老逾期/已做完', function () {
+  var s = soonFixture();
+  var names = R.dueSoon(s, '2026-10-21', '2026-10-21T20:40:00', 24).map(function (x) { return x.hw.title; });
+  assert.strictEqual(names.indexOf('明天上午') >= 0, true, names.join(','));
+  assert.strictEqual(names.indexOf('后天') >= 0, false);
+  assert.strictEqual(names.indexOf('三天前逾期') >= 0, false);
+  assert.strictEqual(names.indexOf('已完成') >= 0, false);
+});
+
+test('dueSoon：没写几点的只在「今天到期」时才喊', function () {
+  var s = soonFixture();
+  var names = R.dueSoon(s, '2026-10-21', '2026-10-21T20:40:00', 24).map(function (x) { return x.hw.title; });
+  assert.strictEqual(names.indexOf('今天没几点') >= 0, true);
+});
+
+test('dueSoon：窗口参数非法时回退 24 小时，不抛错', function () {
+  var s = soonFixture();
+  assert.ok(R.dueSoon(s, '2026-10-21', '2026-10-21T20:40:00', 0).length >= 1);
+  assert.ok(R.dueSoon(s, '2026-10-21', '2026-10-21T20:40:00', 'x').length >= 1);
+});
+
 /* ---------------- 汇总 ---------------- */
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
