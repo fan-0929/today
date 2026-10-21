@@ -907,19 +907,24 @@
     };
   }
 
-  /** 把 HTTP/网络错误翻译成给用户看的一句话 */
+  /** 把 HTTP/网络错误翻译成给用户看的一句话（带上原始信息，方便排查） */
   function explainError(status, bodyText) {
     var body = String(bodyText || '');
-    if (status === 0) return '连不上模型服务（网络不通或超时）';
-    if (status === 401 || status === 403) return 'Key 无效或没有权限，去设置里重填';
-    if (status === 429) return '请求太频繁或额度用完了，等一会儿再试';
-    if (status === 404) return '模型名不对，去设置里换成 glm-4v-plus 试试';
-    if (status >= 500) return '模型服务自己出错了（' + status + '），稍后再试';
-    var m = body.match(/"message"\s*:\s*"([^"]{1,120})"/);
-    var msg = m ? m[1] : '';
-    if (/max_tokens/i.test(msg + body)) return '这次请求带的参数被模型拒了（max_tokens 超范围），已经修好，刷新页面再试';
-    if (/content|图片|image|size|illegal/i.test(msg)) return '这张图模型读不了（太大或格式不支持），换一张或裁小一点';
-    return msg ? '模型返回错误：' + msg : '识别失败（HTTP ' + status + '）';
+    var m = body.match(/"message"\s*:\s*"([^"]{1,160})"/);
+    var apiMsg = m ? m[1] : '';
+    var tail = apiMsg ? '（' + apiMsg + '）' : '';
+    if (status === 0) return '连不上模型服务：网络不通、被墙，或浏览器拦了跨域';
+    if (status === 401) return 'Key 不对或已过期，去设置里重填' + tail;
+    if (status === 403) return '这个 Key 没有调用权限（可能没实名/没开通）' + tail;
+    if (status === 429) return '请求太频繁或免费额度用完了，等一会儿再试' + tail;
+    if (status === 404) return '模型名不对，去设置里换成 glm-4v-plus 再试' + tail;
+    if (status === 413) return '这张图太大，换一张或裁小一点';
+    if (status >= 500) return '模型服务自己出错了（HTTP ' + status + '），等几分钟再试' + tail;
+    if (/max_tokens/i.test(apiMsg + body)) return '这次请求的参数被拒（max_tokens 超范围）' + tail;
+    if (/content|图片|image|size|illegal|base64/i.test(apiMsg)) return '这张图模型读不了（太大或格式不支持），换一张或裁小一点' + tail;
+    if (apiMsg) return '模型返回错误（HTTP ' + status + '）：' + apiMsg;
+    var snip = body.replace(/\s+/g, ' ').slice(0, 120);
+    return '识别失败（HTTP ' + status + '）' + (snip ? '：' + snip : '');
   }
 
   return {
