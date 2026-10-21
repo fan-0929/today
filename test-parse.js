@@ -302,8 +302,8 @@ test('兜底草稿也能猜出课程和截止日', function () {
 
 
 test('HTTP 错误翻译成人话', function () {
-  assert.ok(P.explainError(401).indexOf('Key 无效') >= 0);
-  assert.ok(P.explainError(403).indexOf('Key 无效') >= 0);
+  assert.ok(P.explainError(401).indexOf('Key 不对') >= 0);
+  assert.ok(P.explainError(403).indexOf('没有调用权限') >= 0);
   assert.ok(P.explainError(429).indexOf('额度') >= 0);
   assert.ok(P.explainError(404).indexOf('模型名') >= 0);
   assert.ok(P.explainError(500).indexOf('服务') >= 0);
@@ -331,7 +331,7 @@ test('请求体：传小了照用，传 0 走默认', function () {
 test('错误归因：max_tokens 被拒给的是人话，不是原始报文', function () {
   var s = P.explainError(400, '{"error":{"message":"max_tokens参数非法：限制数值范围[1,1024]"}}');
   assert.ok(s.indexOf('max_tokens') >= 0, s);
-  assert.ok(s.indexOf('刷新页面') >= 0, s);
+  assert.ok(s.indexOf('限制数值范围') >= 0, '要带上原始报文，方便排查：' + s);
 });
 
 /* ---------------- 纯文字解析（打字 / 粘贴，不联网） ---------------- */
